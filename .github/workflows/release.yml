@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["release-please"]
+    types: [completed]
+  # Backfill: rebuild and upload to an already-tagged release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to (re)build and publish, e.g. v0.2.0'
+        required: true
+
+jobs:
+  # Tags made with GITHUB_TOKEN don't trigger `push: tags`, so this runs after
+  # release-please and checks whether that run tagged its own commit.
+  check-release-tag:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.find_tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # workflow_run checks out the default branch tip, not the triggering commit. A
+          # backfill builds the dispatch ref, not the tag, so release-process fixes apply.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Find a release tag pointing at this commit
+        id: find_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            # No match is the normal case for a non-release merge; || true keeps -e from failing it.
+            TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check-release-tag
+    if: needs.check-release-tag.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      # Written into the version resource of the DLL and the Windows CLI at build time.
+      PROVENANCE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_sha }}
+
+      - name: Build the Explorer extension DLL
+        run: make dll
+
+      - name: Build the Windows CLI
+        run: make cli-win
+
+      - name: Build the Linux CLI
+        run: make build
+
+      - name: Package
+        run: make package VERSION=${TAG#v}
+        env:
+          TAG: ${{ needs.check-release-tag.outputs.tag }}
+
+      # Attestation is by digest, so nothing may rewrite these files after this step.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: |
+            dist/sigstore_shell_ext.dll
+            dist/sigstore-shell-cli.exe
+            dist/sigstore-shell-cli
+            dist/sigstore-shell-ext-*-windows-x64.zip
+            dist/SHA256SUMS
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-release-tag.outputs.tag }}
+        run: >-
+          gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY"
+          dist/sigstore_shell_ext.dll dist/sigstore-shell-cli.exe dist/sigstore-shell-cli
+          dist/sigstore-shell-ext-*-windows-x64.zip dist/SHA256SUMS
