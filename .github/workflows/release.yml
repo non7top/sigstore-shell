@@ -51,6 +51,7 @@ jobs:
     env:
       # Written into the version resource of the DLL and the Windows CLI at build time.
       PROVENANCE_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ substring(needs.check-release-tag.outputs.tag, 1) }}
     steps:
       - uses: actions/checkout@v7
         with:

@@ -6,12 +6,7 @@
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
       "extra-label": "RELEASE",
-      "extra-files": [
-        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
-        { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name=='provenance-core')].version" },
-        { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name=='sigstore-shell-cli')].version" },
-        { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name=='sigstore-shell-ext')].version" }
-      ]
+      "bump-minor-pre-major": true
     }
   }
 }
