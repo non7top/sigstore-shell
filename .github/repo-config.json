@@ -6,7 +6,7 @@
     "allow_rebase_merge": false,
     "allow_squash_merge": false,
     "allow_update_branch": false,
-    "default_branch": "main",
+    "default_branch": "master",
     "delete_branch_on_merge": false,
     "description": "Windows Explorer Properties tab that shows which GitHub repo built an exe, verified from its Sigstore attestation.",
     "has_discussions": false,
@@ -51,7 +51,7 @@
   "x-comment-rulesets": "https://docs.github.com/en/rest/repos/rules#update-a-repository-ruleset",
   "rulesets": [
     {
-      "name": "require-pr-to-main",
+      "name": "require-pr-to-master",
       "target": "branch",
       "enforcement": "active",
       "bypass_actors": [],
@@ -59,7 +59,7 @@
         "ref_name": {
           "exclude": [],
           "include": [
-            "refs/heads/main"
+            "refs/heads/master"
           ]
         }
       },
