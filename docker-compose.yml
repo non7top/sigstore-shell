@@ -1,0 +1,16 @@
+services:
+  dev:
+    build: .
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    working_dir: /app
+    environment:
+      - GH_TOKEN
+      - GITHUB_TOKEN
+    volumes:
+      - .:/app
+      - cargo:/cargo
+      - target:/cargo-target
+
+volumes:
+  cargo:
+  target:

@@ -1,0 +1,23 @@
+[package]
+name = "provenance-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read, look up and verify the Sigstore provenance of an exe"
+
+[dependencies]
+async-trait = "0.1"
+hex = "0.4"
+jiff = "0.2"
+pelite = { version = "0.10", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+snap = "1"
+sha2 = "0.10"
+sigstore-verify = { version = "0.14", features = ["tuf"] }
+sigstore-rekor = "0.14"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
