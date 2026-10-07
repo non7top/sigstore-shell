@@ -2,7 +2,7 @@
 
 A Windows Explorer extension that adds a **Sigstore** tab to a file's Properties dialog. It shows which GitHub repo built an exe, with the workflow, commit and signing date, verified from the file's Sigstore attestation.
 
-Status: early development. The command-line prototype (below) works; the Explorer extension follows.
+Status: early development. The command-line prototype and the Explorer extension (below) are built; the extension has not yet been run in real Explorer (see [Verification status](#verification-status)).
 
 ## How it works
 
@@ -41,6 +41,47 @@ Outcomes and exit codes:
 | not checked | 14 | No repo to ask about and `--rekor` not given |
 
 Code lives in `crates/provenance-core` (PE version-resource reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
+
+## Explorer extension
+
+A native 64-bit COM DLL (`crates/sigstore-shell-ext`, Rust) that adds a **Sigstore** tab to the Properties of a single selected `.exe`.
+
+- Opening the tab reads `ProvenanceRepo` from the file and shows it as "claimed, not verified", or "no provenance information in this file". No hashing, no network.
+- **Verify** hashes the file, asks GitHub for the attestation, verifies it and shows repo, owner, workflow, commit, signing time and which provider answered. It runs on a worker thread with a progress bar and a Cancel button. Pressing it is the consent to send the file's SHA-256 to `api.github.com` (and to download Sigstore's trust root).
+- Results are cached by file hash in `%LOCALAPPDATA%\sigstore-shell\cache` (verified and mismatch for 7 days, "no attestation" for 1 hour; failures are never cached). A cached answer still needs the file hashed again.
+- Rekor v1 search is off. To enable it, create `%LOCALAPPDATA%\sigstore-shell\settings.json` containing `{"rekor": true}`. The tab then states that the hash also goes to `rekor.sigstore.dev`, and files with no embedded repo become verifiable.
+- No GitHub token is used, so the unauthenticated limit (60 requests per hour per IP) applies; the cache keeps repeat checks off the API.
+
+### Build
+
+```sh
+make dll          # dist/sigstore_shell_ext.dll, cross-compiled to x86_64-pc-windows-gnu in the container
+make wine-smoke   # registers, loads and unloads the DLL under Wine (headless)
+make wine-ui      # also builds the page under a virtual display and presses Verify (needs network)
+```
+
+The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs no Rust or MinGW runtime. TLS is rustls with the platform verifier, so certificates are checked against the Windows certificate store and no OpenSSL or bundled root list is involved. It is 64-bit only, so 32-bit programs that show Properties will not load it.
+
+### Install and uninstall (Windows, as administrator)
+
+```powershell
+mkdir "C:\Program Files\sigstore-shell"
+copy dist\sigstore_shell_ext.dll "C:\Program Files\sigstore-shell\"
+copy installer\register.ps1, installer\unregister.ps1 "C:\Program Files\sigstore-shell\"
+& "C:\Program Files\sigstore-shell\register.ps1"
+```
+
+Then open the Properties of an `.exe` and look for the Sigstore tab. To remove it run `unregister.ps1`; Explorer keeps the DLL loaded until it restarts, so restart Explorer (or sign out) before deleting the file.
+
+`register.ps1` calls `regsvr32`, which writes, under `HKLM\Software\Classes`, the CLSID with its `InprocServer32` and the handler key `exefile\shellex\PropertySheetHandlers\SigstoreShell`, and adds the CLSID to `HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved`. `installer/sigstore-shell.iss` is an Inno Setup script doing the same; it is not built here because Inno Setup runs only on Windows.
+
+### Signing
+
+The DLL is not Authenticode-signed. Unsigned, it loads for a user who runs `register.ps1`, but SmartScreen and some endpoint-protection products will flag it, and a real release should be signed. Sign `sigstore_shell_ext.dll` and the installer with a timestamp, for example `signtool sign /fd SHA256 /tr <timestamp-url> /td SHA256 /a sigstore_shell_ext.dll`, before packaging. SignPath Foundation offers free signing for open-source projects. Signing is not set up in this repository yet.
+
+### Verification status
+
+Verified here: the unit tests (`make test`), clippy for Linux and for the Windows target, the DLL's imports and exports, and under Wine 10 the registration, `DllGetClassObject`, `IShellExtInit`/`IShellPropSheetExt::AddPages`, `DllCanUnloadNow` and unregistration. Not verified: loading in real Explorer, the Windows 11 classic Properties dialog, the page's appearance and behaviour on real Windows (Wine's result is in [project.md](project.md)), DPI scaling, and the DLL on Windows 10. Treat those as open until tried on a Windows machine.
 
 ## Publishing a project that works with it
 

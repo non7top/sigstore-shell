@@ -1,6 +1,8 @@
 services:
   dev:
-    build: .
+    build:
+      context: .
+      target: dev
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     working_dir: /app
     environment:
@@ -11,6 +13,18 @@ services:
       - cargo:/cargo
       - target:/cargo-target
 
+  wine:
+    build:
+      context: .
+      target: wine
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    working_dir: /app
+    volumes:
+      - .:/app
+      - target:/cargo-target:ro
+      - wineprefix:/wine
+
 volumes:
   cargo:
   target:
+  wineprefix:

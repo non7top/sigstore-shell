@@ -5,11 +5,15 @@ edition.workspace = true
 license.workspace = true
 description = "Read, look up and verify the Sigstore provenance of an exe"
 
+[features]
+# Exposes the synthetic PE builder used by the unit tests, for smoke tests of other crates.
+test-fixtures = []
+
 [dependencies]
 async-trait = "0.1"
 hex = "0.4"
 jiff = "0.2"
-pelite = { version = "0.10", default-features = false, features = ["std"] }
+pelite = { version = "0.10", default-features = false, features = ["std", "mmap"] }
 reqwest = { version = "0.13", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,3 +25,7 @@ thiserror = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[[example]]
+name = "fixture_exe"
+required-features = ["test-fixtures"]

@@ -36,8 +36,15 @@ pub fn read_claim(image: &[u8]) -> Result<Option<String>, PeError> {
         .map_err(PeError)
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
+/// Like [`read_claim`] but maps the file instead of reading it, so a large exe is not loaded.
+pub fn read_claim_file(path: &std::path::Path) -> Result<Option<String>, PeError> {
+    let map =
+        pelite::FileMap::open(path).map_err(|e| PeError(format!("{}: {e}", path.display())))?;
+    read_claim(map.as_ref())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixture {
     fn pad4(buf: &mut Vec<u8>) {
         while !buf.len().is_multiple_of(4) {
             buf.push(0);
@@ -183,6 +190,16 @@ mod tests {
     fn missing_key_is_none() {
         let pe = pe_with_version_strings(&[("ProductName", "Demo")]);
         assert_eq!(read_claim(&pe).unwrap(), None);
+    }
+
+    #[test]
+    fn reads_claim_from_a_file_on_disk() {
+        let dir = std::env::temp_dir().join(format!("pc-claim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("app.exe");
+        std::fs::write(&file, pe_with_version_strings(&[("ProvenanceRepo", "a/b")])).unwrap();
+        assert_eq!(read_claim_file(&file).unwrap().as_deref(), Some("a/b"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
