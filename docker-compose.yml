@@ -9,6 +9,7 @@ services:
       - GH_TOKEN
       - GITHUB_TOKEN
       - PROVENANCE_REPO
+      - RELEASE_VERSION
     volumes:
       - .:/app
       - cargo:/cargo
