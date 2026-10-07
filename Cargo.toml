@@ -1,8 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/provenance-core", "crates/sigstore-shell-cli"]
+members = ["crates/provenance-core", "crates/sigstore-shell-cli", "crates/sigstore-shell-ext"]
+default-members = ["crates/provenance-core", "crates/sigstore-shell-cli"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+
+[profile.release]
+strip = true
+lto = "thin"

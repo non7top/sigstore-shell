@@ -1,14 +1,14 @@
 use crate::github::valid_repo;
 use crate::identity::Identity;
-use crate::pe::read_claim;
+use crate::pe::read_claim_file;
 use crate::provider::{Provider, ProviderError, RateLimit};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sigstore_verify::trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 use sigstore_verify::types::{Bundle, Sha256Hash};
 use sigstore_verify::{VerificationPolicy, Verifier};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Verified,
@@ -23,7 +23,7 @@ pub enum Status {
     NotChecked,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustRootSource {
     /// Fetched and validated through Sigstore's TUF repository.
@@ -38,7 +38,7 @@ pub struct Options {
     pub repo: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub status: Status,
     pub file_sha256: String,
@@ -55,10 +55,14 @@ pub struct Report {
 pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     match TrustedRoot::production().await {
         Ok(root) => Ok((root, TrustRootSource::Tuf)),
-        Err(_) => TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
-            .map(|root| (root, TrustRootSource::Embedded))
-            .map_err(|e| format!("no usable Sigstore trust root: {e}")),
+        Err(_) => load_embedded_root(),
     }
+}
+
+pub fn load_embedded_root() -> Result<(TrustedRoot, TrustRootSource), String> {
+    TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
+        .map(|root| (root, TrustRootSource::Embedded))
+        .map_err(|e| format!("no usable Sigstore trust root: {e}"))
 }
 
 fn same_repo(a: &str, b: &str) -> bool {
@@ -97,15 +101,13 @@ pub async fn verify_file(
     let digest_hex = crate::sha256_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut notes = Vec::new();
 
-    let image = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let claimed_repo = match read_claim(&image) {
+    let claimed_repo = match read_claim_file(path) {
         Ok(claim) => claim,
         Err(e) => {
             notes.push(e.to_string());
             None
         }
     };
-    drop(image);
     if let Some(claim) = &claimed_repo {
         if !valid_repo(claim) {
             notes.push(format!(
@@ -126,7 +128,8 @@ pub async fn verify_file(
     .await
 }
 
-async fn verify_digest(
+/// Looks up and verifies an already-hashed file. `claimed_repo` must already be validated.
+pub async fn verify_digest(
     digest_hex: &str,
     claimed_repo: Option<String>,
     notes: Vec<String>,

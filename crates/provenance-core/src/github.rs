@@ -22,7 +22,7 @@ struct Attestation {
     bundle_url: Option<String>,
 }
 
-pub(crate) fn valid_repo(repo: &str) -> bool {
+pub fn valid_repo(repo: &str) -> bool {
     let mut parts = repo.split('/');
     let ok = |s: &str| {
         !s.is_empty()

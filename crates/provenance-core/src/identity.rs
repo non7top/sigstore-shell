@@ -1,9 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sigstore_verify::crypto::CertificateInfo;
 use sigstore_verify::SubjectAltName;
 
 /// What the Fulcio certificate says about the build. Every field is a certificate claim.
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Identity {
     pub repo: Option<String>,
     pub owner: Option<String>,
