@@ -4,12 +4,21 @@ export DOCKER_GID := $(shell id -g)
 CARGO := docker compose run --rm dev cargo
 WIN := x86_64-pc-windows-gnu
 
-.PHONY: build dll fixture wine-smoke wine-ui test lint fmt shell
+.PHONY: build cli-win package dll fixture wine-smoke wine-ui test lint fmt shell
 
 build:
 	mkdir -p dist
 	$(CARGO) build --release --locked
 	docker compose run --rm dev cp /cargo-target/release/sigstore-shell-cli /app/dist/sigstore-shell-cli
+
+cli-win:
+	mkdir -p dist
+	$(CARGO) build --release --locked --target $(WIN) -p sigstore-shell-cli
+	docker compose run --rm dev cp /cargo-target/$(WIN)/release/sigstore-shell-cli.exe /app/dist/sigstore-shell-cli.exe
+
+# Needs dist/ from build, cli-win and dll; VERSION names the zip. --build picks up image changes.
+package:
+	docker compose run --rm --build dev ./scripts/package.sh $(VERSION)
 
 dll:
 	mkdir -p dist

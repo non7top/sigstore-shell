@@ -8,6 +8,7 @@ services:
     environment:
       - GH_TOKEN
       - GITHUB_TOKEN
+      - PROVENANCE_REPO
     volumes:
       - .:/app
       - cargo:/cargo

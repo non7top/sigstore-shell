@@ -62,6 +62,21 @@ make wine-ui      # also builds the page under a virtual display and presses Ver
 
 The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs no Rust or MinGW runtime. TLS is rustls with the platform verifier, so certificates are checked against the Windows certificate store and no OpenSSL or bundled root list is involved. It is 64-bit only, so 32-bit programs that show Properties will not load it.
 
+### Download and verify a release
+
+Releases are built by GitHub Actions from this repo and attested with `actions/attest-build-provenance`. The DLL and the Windows CLI carry `ProvenanceRepo = non7top/sigstore-shell` in their version resource, so the extension can verify itself. Each release has:
+
+- `sigstore-shell-ext-<version>-windows-x64.zip`: the DLL, `register.ps1`, `unregister.ps1`, the Inno Setup script and install notes
+- `sigstore_shell_ext.dll`, `sigstore-shell-cli.exe` (Windows), `sigstore-shell-cli` (Linux x86-64)
+- `SHA256SUMS`
+
+```sh
+gh release download v0.1.0 --repo non7top/sigstore-shell
+gh attestation verify sigstore-shell-ext-0.1.0-windows-x64.zip --repo non7top/sigstore-shell
+```
+
+Then unzip and follow `INSTALL.md` in the zip, or the steps below. Releases are cut by merging the release-please PR; commits must follow [Conventional Commits](https://www.conventionalcommits.org/).
+
 ### Install and uninstall (Windows, as administrator)
 
 ```powershell
