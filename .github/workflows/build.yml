@@ -28,6 +28,23 @@ jobs:
         id: checked_out
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Host directories instead of the compose named volumes, so actions/cache can carry them between runs.
+      - name: Point the cargo caches at host directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/cargo-target"
+          echo "CARGO_CACHE=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "TARGET_CACHE=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
+
+      - name: Restore the cargo caches
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
+          restore-keys: cargo-
+
       - name: Lint
         run: make lint
 
@@ -98,3 +115,13 @@ jobs:
           gh pr comment "${{ github.event.pull_request.number }}" --body "Windows build ready for \`${{ steps.vars.outputs.sha_short }}\`:
           - [sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip](${{ steps.upload.outputs.artifact-url }}) (DLL and install scripts)
           - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})"
+
+      # Only master saves: PR-scoped caches are unreadable by other PRs and would evict it.
+      - name: Save the cargo caches
+        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
