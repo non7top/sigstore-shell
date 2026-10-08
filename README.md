@@ -1,8 +1,8 @@
 # sigstore-shell
 
-**Problem.** These days `org/repo` is your guide. Most of the software on a new workstation is open source; you find it by searching, the search lands on a GitHub repo, and you download a binary from its releases: Go tools on Linux, media players and utilities on Windows. What vouches for that binary? On Windows, a signature shows you a name. For a media player you've never heard of, you can't tell who that is, what the name proves, or how it ties to the file in front of you. On Linux, GPG signatures exist and people sometimes check them. Neither kind of signature says how the file was built or from which source code.
+**Problem.** These days `org/repo` and a commit SHA are your guide. Most of the software on a new workstation is open source; you find it by searching, the search lands on a GitHub repo, and you download a binary from its releases: Go tools on Linux, media players and utilities on Windows. What vouches for that binary? On Windows, a signature shows you a name. For a media player you've never heard of, you can't tell who that is, what the name proves, or how it ties to the file in front of you. On Linux, GPG signatures exist and people sometimes check them. Neither kind of signature says how the file was built or from which source code.
 
-But the source is public. Sigstore provenance ties the file to it: a signed, public record of which repo, workflow and commit published this exact file. The trust moves from a name to a public repo you can read. The tool shows which repo published the file; compare it with the repo you downloaded from. No signature says the code is safe, and this doesn't either. It says which workflow, at which commit, produced the file; read that workflow to see how.
+But the source is public, and many binaries already print their repo's commit (MPC-HC says `2.8.0 (b12b255eb)`), though nothing checks it. Sigstore provenance makes that checkable by tying the file to it: a signed, public record of which repo, workflow and commit published this exact file. The trust moves from a name to a public repo you can read. The tool shows which repo published the file; compare it with the repo you downloaded from. No signature says the code is safe, and this doesn't either. It says which workflow, at which commit, produced the file; read that workflow to see how.
 
 This project shows that record where you look at the file: the Properties dialog in Explorer, or a command.
 
@@ -20,6 +20,15 @@ Nothing is hashed or sent anywhere until you press **Verify** or run the CLI. Ei
 3. The identity shown comes only from the certificate, never from the embedded string; a mismatch is flagged. "No attestation" means none was found, not that the file is unsafe.
 
 Rekor v1 (search by hash, for files with no embedded repo) is optional and off by default.
+
+## Not our invention
+
+The signing, the records and the checking already exist. This project only puts them next to the file.
+
+- **Sigstore** (short-lived Fulcio certificates, the Rekor log, a public trust root) does the signing. The publisher holds no key, and neither do we.
+- **GitHub artifact attestations**, made by `actions/attest-build-provenance`, are the records we look up: in-toto statements with SLSA build provenance v1, as in the real cli/cli attestation we test against.
+- **[sigstore-verify](https://crates.io/crates/sigstore-verify)** does the verification. We wrote no cryptography.
+- What we add: the tie. The embedded `owner/repo` points the file at a public place to ask, and the tool asks it for you and shows the answer next to the file.
 
 ## Use
 
