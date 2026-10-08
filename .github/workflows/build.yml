@@ -1,17 +1,100 @@
 name: Build
 
 on:
+  push:
+    branches: [master]
   pull_request:
+    # `edited` because the predicted version below comes from the PR title.
+    types: [opened, synchronize, reopened, edited]
+    branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Record the checked-out commit
+        id: checked_out
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Lint
         run: make lint
 
       - name: Test
         run: make test
+
+      - name: Predict next version
+        id: predict
+        if: github.event_name == 'pull_request'
+        uses: non7top/release-please-forecast@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          post-comment: 'false'
+
+      # The forecast action leaves the tree on its own preview branch.
+      - name: Restore the merge result for the build
+        if: github.event_name == 'pull_request'
+        run: git checkout ${{ steps.checked_out.outputs.sha }}
+
+      - name: Compute artifact version
+        id: vars
+        env:
+          PREDICTED: ${{ steps.predict.outputs.version }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          sha_short=${GITHUB_SHA:0:7}
+          echo "sha_short=$sha_short" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREDICTED" ]; then
+            echo "version=${PREDICTED}-rc${PR}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$sha_short" >> "$GITHUB_OUTPUT"
+          fi
+
+      # No PROVENANCE_REPO: only release builds claim to come from the repo's workflow.
+      - name: Build the DLL
+        run: make dll
+
+      - name: Build the Windows CLI
+        run: make cli-win
+
+      - name: Build the Linux CLI
+        run: make build
+
+      - name: Package
+        run: make package VERSION=${{ steps.vars.outputs.version }}
+
+      - name: Upload the extension package
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip
+          retention-days: 14
+          archive: false
+
+      - name: Upload the Windows CLI
+        id: upload-cli
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/sigstore-shell-cli.exe
+          retention-days: 14
+          archive: false
+
+      - name: Comment download links on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body "Windows build ready for \`${{ steps.vars.outputs.sha_short }}\`:
+          - [sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip](${{ steps.upload.outputs.artifact-url }}) (DLL and install scripts)
+          - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})"
