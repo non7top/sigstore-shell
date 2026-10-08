@@ -15,7 +15,7 @@ pub fn strip_markup(markup: &str) -> String {
 }
 
 pub const FOOTER_MARKUP: &str =
-    "Verified against Sigstore's public roots, with GitHub vouching for \
+    "Verification uses Sigstore's public roots, with GitHub vouching for \
     which workflow ran. <a>What is Sigstore?</a> <a>About this tab</a>";
 pub const FOOTER_URLS: [&str; 2] = [SIGSTORE_URL, PROJECT_URL];
 
@@ -218,7 +218,7 @@ mod tests {
         assert!(FOOTER_URLS.iter().all(|u| openable(u)));
         assert_eq!(
             strip_markup(FOOTER_MARKUP),
-            "Verified against Sigstore's public roots, with GitHub vouching for which workflow \
+            "Verification uses Sigstore's public roots, with GitHub vouching for which workflow \
              ran. What is Sigstore? About this tab"
         );
         for word in [

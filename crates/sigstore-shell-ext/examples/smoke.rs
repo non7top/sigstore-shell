@@ -231,9 +231,11 @@ mod imp {
         if let Some(f) = shot {
             screenshot(sheet, &format!("{f}.before.bmp"));
         }
-        println!("claim:    {}", text(page_hwnd, 101));
+        println!("repo:     {}", text(page_hwnd, 101));
+        println!("note:     {}", text(page_hwnd, 110));
         println!("headline: {}", text(page_hwnd, 102));
         println!("consent:  {}", text(page_hwnd, 104));
+        println!("explain:  {}", text(page_hwnd, 111));
         let verify = unsafe { GetDlgItem(Some(page_hwnd), 107) }.unwrap();
         step(
             "Verify enabled for a file with a claim",
@@ -258,21 +260,13 @@ mod imp {
             }
         }
         println!("final headline: {}", text(page_hwnd, 102));
-        let icon = unsafe { GetDlgItem(Some(page_hwnd), 116) }.unwrap();
-        let got = unsafe {
-            SendMessageW(
-                icon,
-                windows::Win32::UI::WindowsAndMessaging::STM_GETICON,
-                None,
-                None,
-            )
-        };
         println!(
-            "outcome icon handle: {:#x}, fallback glyph: {:?}",
-            got.0,
-            text(page_hwnd, 109)
+            "final repo: {} {}",
+            text(page_hwnd, 101),
+            text(page_hwnd, 110)
         );
-        println!("final summary: {}", text(page_hwnd, 110));
+        println!("rate line: {}", text(page_hwnd, 117));
+        println!("verify label: {}", text(page_hwnd, 107));
         println!("final details:\n{}", text(page_hwnd, 103));
         pump(500);
         if let Some(f) = shot {

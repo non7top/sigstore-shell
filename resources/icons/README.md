@@ -1,6 +1,6 @@
 # Icons
 
-Outcome icons shown beside the verdict on the Sigstore tab. The text next to each icon carries the meaning; the icon only reinforces it.
+Outcome icons shown beside the verdict on the Provenance tab. The text next to each icon carries the meaning; the icon only reinforces it.
 
 | File | Used for | Origin |
 | --- | --- | --- |

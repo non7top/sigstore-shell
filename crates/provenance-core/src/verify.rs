@@ -174,6 +174,12 @@ pub async fn verify_digest(
                 if fetched.rate_limit.is_some() {
                     report.rate_limit = fetched.rate_limit;
                 }
+                if fetched.retried {
+                    report.notes.push(format!(
+                        "{}: the server returned an error; retried once",
+                        provider.name()
+                    ));
+                }
                 if fetched.skipped > 0 {
                     report.notes.push(format!(
                         "{}: ignored {} entries that could not be turned into a bundle",
@@ -252,6 +258,7 @@ mod tests {
     enum Mock {
         Bundle,
         Empty,
+        Retried,
         Fail,
     }
 
@@ -267,6 +274,10 @@ mod tests {
                     ..Fetched::default()
                 }),
                 Mock::Empty => Ok(Fetched::default()),
+                Mock::Retried => Ok(Fetched {
+                    retried: true,
+                    ..Fetched::default()
+                }),
                 Mock::Fail => Err(ProviderError::failed("offline")),
             }
         }
@@ -328,6 +339,12 @@ mod tests {
     async fn empty_answer_is_no_attestation() {
         let r = run(Mock::Empty, DIGEST, Some("cli/cli")).await;
         assert_eq!(r.status, Status::NoAttestation);
+    }
+
+    #[tokio::test]
+    async fn a_retry_is_noted_in_the_report() {
+        let r = run(Mock::Retried, DIGEST, Some("cli/cli")).await;
+        assert!(r.notes.iter().any(|n| n.contains("retried once")));
     }
 
     #[tokio::test]

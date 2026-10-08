@@ -1,6 +1,7 @@
 use crate::provider::{Fetched, Provider, ProviderError, RateLimit};
 use serde::Deserialize;
 use sigstore_verify::types::Bundle;
+use std::time::Duration;
 
 const API: &str = "https://api.github.com";
 
@@ -8,6 +9,7 @@ pub struct GithubProvider {
     client: reqwest::Client,
     token: Option<String>,
     base: String,
+    retry_delay: Duration,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +48,13 @@ impl GithubProvider {
             client,
             token: token.filter(|t| !t.is_empty()),
             base: base.trim_end_matches('/').to_string(),
+            retry_delay: Duration::from_secs(1),
         }
+    }
+
+    pub fn with_retry_delay(mut self, delay: Duration) -> Self {
+        self.retry_delay = delay;
+        self
     }
 
     pub fn authenticated(&self) -> bool {
@@ -73,6 +81,31 @@ fn rate_limit(headers: &reqwest::header::HeaderMap) -> RateLimit {
 }
 
 impl GithubProvider {
+    /// One retry after a short pause, for a 5xx only: 4xx and rate limiting would just repeat.
+    async fn get_with_retry(&self, url: &str) -> Result<(reqwest::Response, bool), ProviderError> {
+        let mut retried = false;
+        loop {
+            let mut req = self
+                .client
+                .get(url)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28");
+            if let Some(token) = &self.token {
+                req = req.bearer_auth(token);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| ProviderError::failed(format!("request to GitHub failed: {e}")))?;
+            if resp.status().is_server_error() && !retried {
+                retried = true;
+                tokio::time::sleep(self.retry_delay).await;
+                continue;
+            }
+            return Ok((resp, retried));
+        }
+    }
+
     /// The API now returns a short-lived blob URL instead of the bundle; the blob is
     /// Snappy-compressed JSON and must not receive the GitHub token.
     async fn download_bundle(&self, url: &str) -> Option<Bundle> {
@@ -109,23 +142,13 @@ impl Provider for GithubProvider {
             "{}/repos/{repo}/attestations/sha256:{digest_hex}?per_page=100",
             self.base
         );
-        let mut req = self
-            .client
-            .get(url)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ProviderError::failed(format!("request to GitHub failed: {e}")))?;
+        let (resp, retried) = self.get_with_retry(&url).await?;
         let limits = rate_limit(resp.headers());
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(Fetched {
                 rate_limit: Some(limits),
+                retried,
                 ..Fetched::default()
             });
         }
@@ -144,7 +167,10 @@ impl Provider for GithubProvider {
             };
             let body: String = body.chars().take(200).collect();
             return Err(ProviderError::Failed {
-                message: format!("GitHub returned HTTP {status}{hint}: {body}"),
+                message: format!(
+                    "GitHub returned HTTP {status}{hint}: {body}{}",
+                    if retried { " (retried once)" } else { "" }
+                ),
                 rate_limit: Some(limits),
             });
         }
@@ -154,6 +180,7 @@ impl Provider for GithubProvider {
         })?;
         let mut fetched = Fetched {
             rate_limit: Some(limits),
+            retried,
             ..Fetched::default()
         };
         for attestation in parsed.attestations {
@@ -183,6 +210,82 @@ mod tests {
         assert!(!valid_repo("a/b/c"));
         assert!(!valid_repo("a/../b?x=1"));
         assert!(!valid_repo("/b"));
+    }
+
+    /// Serves one canned response per connection, in order; returns the base URL and a hit counter.
+    fn serve(
+        responses: Vec<&'static str>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut conn, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let _ = conn.read(&mut buf);
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = conn.write_all(response.as_bytes());
+            }
+        });
+        (base, hits)
+    }
+
+    const OK: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 20\r\nconnection: close\r\n\r\n{\"attestations\":[]}  ";
+    const E503: &str =
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy";
+    const E404: &str = "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    const E403: &str = "HTTP/1.1 403 Forbidden\r\nx-ratelimit-remaining: 0\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+    fn provider(base: &str) -> GithubProvider {
+        GithubProvider::with_base(None, base).with_retry_delay(Duration::from_millis(10))
+    }
+
+    #[tokio::test]
+    async fn a_503_is_retried_once_and_the_retry_is_reported() {
+        let (base, hits) = serve(vec![E503, OK]);
+        let fetched = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap();
+        assert!(fetched.retried);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn two_503s_fail_after_exactly_one_retry() {
+        let (base, hits) = serve(vec![E503, E503, OK]);
+        let err = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("503") && err.to_string().contains("retried once"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn client_errors_and_rate_limits_are_not_retried() {
+        for response in [E403, E404] {
+            let (base, hits) = serve(vec![response, OK]);
+            let _ = provider(&base)
+                .fetch(&"a".repeat(64), Some("cli/cli"))
+                .await;
+            assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clean_answer_is_not_marked_retried() {
+        let (base, _) = serve(vec![OK]);
+        let fetched = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap();
+        assert!(!fetched.retried);
     }
 
     #[test]

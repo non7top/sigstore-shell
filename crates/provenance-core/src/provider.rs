@@ -15,6 +15,8 @@ pub struct Fetched {
     pub bundles: Vec<Bundle>,
     pub rate_limit: Option<RateLimit>,
     pub skipped: usize,
+    /// The provider hit a server error and asked again once.
+    pub retried: bool,
 }
 
 #[derive(Debug, thiserror::Error)]

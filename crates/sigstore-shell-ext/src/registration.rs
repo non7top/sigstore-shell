@@ -2,7 +2,7 @@
 
 pub const CLSID: &str = "{fbcd8210-9f9c-4b07-900a-ad12500a4363}";
 pub const CLSID_U128: u128 = 0xfbcd8210_9f9c_4b07_900a_ad12500a4363;
-pub const DESCRIPTION: &str = "Sigstore property page";
+pub const DESCRIPTION: &str = "Provenance property page";
 
 const CLASSES: &str = r"Software\Classes";
 const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved";

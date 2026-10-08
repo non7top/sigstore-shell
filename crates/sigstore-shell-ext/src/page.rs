@@ -1,12 +1,12 @@
 use crate::dlgtemplate::{
-    build, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_VERIFIED, ICON_WARNING, IDC_CANCEL,
-    IDC_CLAIM, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_DETAILS_LABEL,
-    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT,
-    IDC_SUMMARY, IDC_VERIFY, LINKS_RECT,
+    build, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT, ICON_VERIFIED, ICON_WARNING,
+    IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN, IDC_FOOTER,
+    IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT, IDC_RATE,
+    IDC_REPO, IDC_REPO_NOTE, IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW, REPO_WIDTH,
 };
 use crate::dll::{guard_value, module, Live};
 use crate::links::{openable, strip_markup, FOOTER_MARKUP, FOOTER_URLS};
-use crate::model::{view, Claim, Event, Outcome, State, View};
+use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
 use provenance_core::read_claim_file;
@@ -14,15 +14,16 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use windows::core::{w, Result, PCWSTR};
+use windows::core::{w, Result, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     GlobalFree, COLORREF, E_FAIL, HANDLE, HINSTANCE, HWND, LPARAM, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateFontW, DeleteObject, GetDC, GetDeviceCaps, GetStockObject, GetSysColor, InvalidateRect,
-    ReleaseDC, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_WINDOWTEXT,
-    DEFAULT_CHARSET, DEFAULT_QUALITY, FF_DONTCARE, FW_BOLD, FW_NORMAL, HDC, HFONT, HGDIOBJ,
-    LOGPIXELSY, NULL_BRUSH, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    CreateFontIndirectW, CreateFontW, DeleteObject, GetDC, GetDeviceCaps, GetObjectW,
+    GetStockObject, GetSysColor, InvalidateRect, ReleaseDC, SetBkMode, SetTextColor,
+    CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_QUALITY,
+    FF_DONTCARE, FW_BOLD, FW_NORMAL, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, NULL_BRUSH,
+    OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -30,22 +31,23 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::Controls::{
-    CreatePropertySheetPageW, DrawThemeParentBackground, HPROPSHEETPAGE, NMHDR, NMLINK, NM_CLICK,
-    NM_RETURN, PBM_SETMARQUEE, PROPSHEETPAGEW, PROPSHEETPAGEW_0, PSPCB_MESSAGE, PSPCB_RELEASE,
-    PSP_DLGINDIRECT, PSP_USECALLBACK, PSP_USETITLE,
+    CreatePropertySheetPageW, DrawThemeParentBackground, DRAWITEMSTRUCT, HPROPSHEETPAGE, NMHDR,
+    NMLINK, NM_CLICK, NM_RETURN, PBM_SETMARQUEE, PROPSHEETPAGEW, PROPSHEETPAGEW_0, PSPCB_MESSAGE,
+    PSPCB_RELEASE, PSP_DLGINDIRECT, PSP_USECALLBACK, PSP_USETITLE, TTF_IDISHWND, TTF_SUBCLASS,
+    TTM_ADDTOOLW, TTM_SETMAXTIPWIDTH, TTTOOLINFOW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, GetDlgCtrlID, GetDlgItem, GetWindowLongPtrW, MapDialogRect, PostMessageW,
-    SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, SystemParametersInfoW,
-    DLGTEMPLATE, HMENU, SPI_GETHIGHCONTRAST, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
-    WM_APP, WM_COMMAND, WM_CTLCOLORSTATIC, WM_DESTROY, WM_GETFONT, WM_INITDIALOG, WM_NOTIFY,
-    WM_SETFONT, WS_CHILD, WS_TABSTOP,
+    SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+    SystemParametersInfoW, DLGTEMPLATE, HMENU, SPI_GETHIGHCONTRAST, SWP_NOACTIVATE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE,
+    WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_GETFONT, WM_INITDIALOG, WM_NOTIFY, WM_SETFONT, WS_CHILD, WS_POPUP, WS_TABSTOP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, LoadImageW, HICON, IMAGE_ICON, LR_DEFAULTCOLOR, STM_SETICON,
+    DestroyIcon, DrawIconEx, LoadImageW, DI_NORMAL, HICON, IMAGE_ICON, LR_DEFAULTCOLOR, WM_DRAWITEM,
 };
 
 /// DWLP_USER in winuser.h (DWLP_DLGPROC + pointer size); the windows crate only has the 32-bit DWL_USER.
@@ -56,6 +58,7 @@ const BN_CLICKED: u32 = 0;
 const EM_SETSEL: u32 = 0xB1;
 const CF_UNICODETEXT: u32 = 13;
 const LWS_TRANSPARENT: u32 = 0x0001;
+const TTS_ALWAYSTIP: u32 = 0x01;
 
 /// What the worker thread may touch; the rest of the page state stays on the UI thread.
 pub struct Mailbox {
@@ -94,6 +97,19 @@ struct Ui {
     rekor: bool,
     state: State,
     cancel: Arc<AtomicBool>,
+    /// From the last fresh response in this tab only; nothing is stored.
+    rate: Option<Rate>,
+    tz: jiff::tz::TimeZone,
+}
+
+impl Ui {
+    fn view(&self) -> View {
+        let env = Env {
+            rate: self.rate,
+            tz: self.tz.clone(),
+        };
+        view_in(&self.claim, &self.state, self.rekor, &env)
+    }
 }
 
 struct PageData {
@@ -104,10 +120,12 @@ struct PageData {
     next_job: AtomicU64,
     ui: RefCell<Ui>,
     outcome: Cell<Outcome>,
-    /// Symbol and monospace fonts, created on init and freed on destroy.
-    fonts: Cell<[isize; 2]>,
+    tone: Cell<Tone>,
+    /// Symbol, monospace, bold and small fonts, created on init and freed on destroy.
+    fonts: Cell<[isize; 4]>,
     has_link_class: Cell<bool>,
     icon: Cell<isize>,
+    icon_px: Cell<i32>,
     _live: Live,
 }
 
@@ -125,11 +143,15 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
             rekor: false,
             state: State::Idle,
             cancel: Arc::new(AtomicBool::new(false)),
+            rate: None,
+            tz: jiff::tz::TimeZone::UTC,
         }),
         outcome: Cell::new(Outcome::None),
-        fonts: Cell::new([0; 2]),
+        tone: Cell::new(Tone::Normal),
+        fonts: Cell::new([0; 4]),
         has_link_class: Cell::new(false),
         icon: Cell::new(0),
+        icon_px: Cell::new(20),
         _live: Live::new(),
     }));
     let mut psp = PROPSHEETPAGEW {
@@ -139,7 +161,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
         Anonymous1: PROPSHEETPAGEW_0 {
             pResource: unsafe { (*data).template.as_ptr().cast_mut().cast::<DLGTEMPLATE>() },
         },
-        pszTitle: w!("Sigstore"),
+        pszTitle: w!("Provenance"),
         pfnDlgProc: Some(dlg_proc),
         lParam: LPARAM(data as isize),
         pfnCallback: Some(page_callback),
@@ -244,19 +266,48 @@ unsafe fn set_font(hwnd: HWND, id: u16, font: isize) {
     }
 }
 
+/// Bold and slightly smaller copies of the dialog font, so they follow the system font and DPI.
+unsafe fn derived_fonts(hwnd: HWND) -> (isize, isize) {
+    let base = SendMessageW(hwnd, WM_GETFONT, None, None).0;
+    let mut lf = LOGFONTW::default();
+    if base == 0
+        || GetObjectW(
+            HGDIOBJ(base as *mut _),
+            std::mem::size_of::<LOGFONTW>() as i32,
+            Some((&mut lf as *mut LOGFONTW).cast()),
+        ) == 0
+    {
+        return (0, 0);
+    }
+    let mut bold = lf;
+    bold.lfWeight = FW_BOLD.0 as i32;
+    let mut small = lf;
+    small.lfHeight = lf.lfHeight * 9 / 10;
+    (
+        CreateFontIndirectW(&bold).0 as isize,
+        CreateFontIndirectW(&small).0 as isize,
+    )
+}
+
 unsafe fn create_fonts(hwnd: HWND, data: &PageData) {
     let dc = GetDC(Some(hwnd));
     let dpi = GetDeviceCaps(Some(dc), LOGPIXELSY).max(96);
     ReleaseDC(Some(hwnd), dc);
     let symbol = make_font(dpi, 14, FW_BOLD.0 as i32, w!("Segoe UI Symbol"));
     let mono = make_font(dpi, 8, FW_NORMAL.0 as i32, w!("Consolas"));
-    data.fonts.set([symbol.0 as isize, mono.0 as isize]);
+    let (bold, small) = derived_fonts(hwnd);
+    data.fonts
+        .set([symbol.0 as isize, mono.0 as isize, bold, small]);
     set_font(hwnd, IDC_GLYPH, symbol.0 as isize);
     set_font(hwnd, IDC_DETAILS, mono.0 as isize);
+    set_font(hwnd, IDC_REPO, bold);
+    for id in [IDC_EXPLAIN, IDC_CONSENT, IDC_RATE] {
+        set_font(hwnd, id, small);
+    }
 }
 
 unsafe fn free_fonts(data: &PageData) {
-    for f in data.fonts.replace([0; 2]) {
+    for f in data.fonts.replace([0; 4]) {
         if f != 0 {
             let _ = DeleteObject(HGDIOBJ(f as *mut _));
         }
@@ -329,6 +380,27 @@ fn icon_id(outcome: Outcome) -> Option<u16> {
 }
 
 /// Shows the outcome icon, or the coloured text glyph when high contrast is on or the icon will not load.
+/// Owner-drawn so the 32-bit icon is blended onto the real page background; a static icon control
+/// paints into a zero-filled (black) buffer when its brush does not cover the background.
+unsafe fn draw_icon(data: &PageData, item: &DRAWITEMSTRUCT) {
+    let _ = DrawThemeParentBackground(item.hwndItem, item.hDC, None);
+    let icon = data.icon.get();
+    if icon != 0 {
+        let px = data.icon_px.get();
+        let _ = DrawIconEx(
+            item.hDC,
+            0,
+            0,
+            HICON(icon as *mut _),
+            px,
+            px,
+            0,
+            None,
+            DI_NORMAL,
+        );
+    }
+}
+
 unsafe fn show_outcome(hwnd: HWND, data: &PageData, outcome: Outcome) {
     let mut icon = HICON::default();
     if let (Some(id), false) = (icon_id(outcome), high_contrast()) {
@@ -336,6 +408,7 @@ unsafe fn show_outcome(hwnd: HWND, data: &PageData, outcome: Outcome) {
         let dpi = GetDeviceCaps(Some(dc), LOGPIXELSY).max(96);
         ReleaseDC(Some(hwnd), dc);
         let px = 20 * dpi / 96;
+        data.icon_px.set(px);
         if let Ok(h) = LoadImageW(
             Some(HINSTANCE(module().0)),
             PCWSTR(usize::from(id) as *const u16),
@@ -347,19 +420,11 @@ unsafe fn show_outcome(hwnd: HWND, data: &PageData, outcome: Outcome) {
             icon = HICON(h.0);
         }
     }
-    if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(IDC_ICON)) {
-        let old = SendMessageW(
-            item,
-            STM_SETICON,
-            Some(WPARAM(icon.0 as usize)),
-            Some(LPARAM(0)),
-        );
-        if old.0 != 0 {
-            let _ = DestroyIcon(HICON(old.0 as *mut _));
-        }
-        data.icon.set(icon.0 as isize);
-        show(hwnd, IDC_ICON, !icon.is_invalid());
+    let old = data.icon.replace(icon.0 as isize);
+    if old != 0 {
+        let _ = DestroyIcon(HICON(old as *mut _));
     }
+    show(hwnd, IDC_ICON, !icon.is_invalid());
     set_text(
         hwnd,
         IDC_GLYPH,
@@ -368,6 +433,11 @@ unsafe fn show_outcome(hwnd: HWND, data: &PageData, outcome: Outcome) {
         } else {
             ""
         },
+    );
+    show(
+        hwnd,
+        IDC_GLYPH,
+        icon.is_invalid() && outcome != Outcome::None,
     );
     invalidate_item(hwnd, IDC_GLYPH);
     invalidate_item(hwnd, IDC_ICON);
@@ -436,18 +506,48 @@ unsafe fn open_url(hwnd: HWND, url: &str) {
     );
 }
 
+unsafe fn move_item(hwnd: HWND, id: u16, x: i16, y: i16, w: i16, h: i16) {
+    let mut r = RECT {
+        left: i32::from(x),
+        top: i32::from(y),
+        right: i32::from(x + w),
+        bottom: i32::from(y + h),
+    };
+    let _ = MapDialogRect(hwnd, &mut r);
+    if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(id)) {
+        let _ = SetWindowPos(
+            item,
+            None,
+            r.left,
+            r.top,
+            r.right - r.left,
+            r.bottom - r.top,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
 unsafe fn render(hwnd: HWND, data: &PageData) {
     // Snapshot first: setting control text can notify us again while the cell is borrowed.
-    let v: View = {
-        let ui = data.ui.borrow();
-        view(&ui.claim, &ui.state, ui.rekor)
-    };
-    set_text(hwnd, IDC_CLAIM, &v.claim_line);
+    let v: View = data.ui.borrow().view();
+    data.tone.set(v.repo_tone);
+    // The icon gets its own column only when there is one, so the text edge never shifts otherwise.
+    let has_icon = v.outcome != Outcome::None;
+    let indent = if has_icon { ICON_SLOT } else { 0 };
+    move_item(
+        hwnd,
+        IDC_REPO,
+        MARGIN + indent,
+        REPO_ROW,
+        REPO_WIDTH - indent,
+        12,
+    );
+    set_text(hwnd, IDC_REPO, &v.repo);
+    set_text(hwnd, IDC_REPO_NOTE, &v.repo_note);
     if data.outcome.replace(v.outcome) != v.outcome {
         show_outcome(hwnd, data, v.outcome);
     }
     set_text(hwnd, IDC_HEADLINE, &v.headline);
-    set_text(hwnd, IDC_SUMMARY, &v.summary);
     let markup = v.links_markup();
     set_text(hwnd, IDC_LINKS, &markup);
     show(
@@ -456,29 +556,21 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
         !markup.is_empty() && data.has_link_class.get(),
     );
     let details = v.has_details();
-    set_text(
-        hwnd,
-        IDC_DETAILS_LABEL,
-        if details {
-            "From the signing certificate:"
-        } else {
-            ""
-        },
-    );
-    show(hwnd, IDC_DETAILS_LABEL, details);
     show(hwnd, IDC_DETAILS, details);
     set_text(hwnd, IDC_DETAILS, &v.details_text());
     if let Ok(edit) = GetDlgItem(Some(hwnd), i32::from(IDC_DETAILS)) {
         SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(0)));
     }
+    set_text(hwnd, IDC_RATE, v.rate_line.as_deref().unwrap_or(""));
     show(hwnd, IDC_COPY_SHA, v.sha256.is_some());
     show(hwnd, IDC_COPY_SIGNER, v.signer.is_some());
     set_text(hwnd, IDC_CONSENT, &v.consent);
     show(hwnd, IDC_CONSENT, v.show_consent);
-    set_text(hwnd, IDC_VERIFY, v.verify_label);
+    set_text(hwnd, IDC_VERIFY, &v.verify_label);
     set_text(hwnd, IDC_PROGRESS_TEXT, &v.progress_text);
     show(hwnd, IDC_PROGRESS, v.running);
     show(hwnd, IDC_CANCEL, v.running);
+    show(hwnd, IDC_VERIFY, !v.running);
     if let Ok(bar) = GetDlgItem(Some(hwnd), i32::from(IDC_PROGRESS)) {
         SendMessageW(
             bar,
@@ -508,17 +600,60 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
             .map(|d| Settings::load(&d))
             .unwrap_or_default()
             .rekor;
+        ui.tz = jiff::tz::TimeZone::system();
     }
     create_fonts(hwnd, data);
     create_text(hwnd, IDC_LINKS, LINKS_RECT, "", data);
     create_text(hwnd, IDC_FOOTER, FOOTER_RECT, FOOTER_MARKUP, data);
+    add_tooltip(hwnd);
     render(hwnd, data);
+}
+
+/// Explains the counter in the Verify label; the text is static, so the tooltip may keep the pointer.
+unsafe fn add_tooltip(hwnd: HWND) {
+    let Ok(button) = GetDlgItem(Some(hwnd), i32::from(IDC_VERIFY)) else {
+        return;
+    };
+    let Ok(tip) = CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        w!("tooltips_class32"),
+        PCWSTR::null(),
+        WINDOW_STYLE(WS_POPUP.0 | TTS_ALWAYSTIP),
+        0,
+        0,
+        0,
+        0,
+        Some(hwnd),
+        None,
+        Some(HINSTANCE(module().0)),
+        None,
+    ) else {
+        return;
+    };
+    let info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+        hwnd,
+        uId: button.0 as usize,
+        lpszText: PWSTR(
+            w!("GitHub API requests left this hour for this IP; shared with other tools on this network.")
+                .as_ptr()
+                .cast_mut(),
+        ),
+        ..Default::default()
+    };
+    SendMessageW(tip, TTM_SETMAXTIPWIDTH, None, Some(LPARAM(300)));
+    SendMessageW(
+        tip,
+        TTM_ADDTOOLW,
+        None,
+        Some(LPARAM(&info as *const TTTOOLINFOW as isize)),
+    );
 }
 
 unsafe fn on_copy(hwnd: HWND, data: &PageData, id: u16) {
     let text = {
-        let ui = data.ui.borrow();
-        let v = view(&ui.claim, &ui.state, ui.rekor);
+        let v = data.ui.borrow().view();
         if id == IDC_COPY_SHA {
             v.sha256
         } else {
@@ -537,13 +672,13 @@ unsafe fn on_link(hwnd: HWND, data: &PageData, nm: *const NMHDR) {
     let index = usize::try_from((*nm.cast::<NMLINK>()).item.iLink).unwrap_or(usize::MAX);
     let url = match (*nm).idFrom {
         id if id == usize::from(IDC_FOOTER) => FOOTER_URLS.get(index).map(|u| (*u).to_string()),
-        id if id == usize::from(IDC_LINKS) => {
-            let ui = data.ui.borrow();
-            view(&ui.claim, &ui.state, ui.rekor)
-                .links
-                .get(index)
-                .map(|l| l.url.clone())
-        }
+        id if id == usize::from(IDC_LINKS) => data
+            .ui
+            .borrow()
+            .view()
+            .links
+            .get(index)
+            .map(|l| l.url.clone()),
         _ => None,
     };
     if let Some(url) = url {
@@ -551,8 +686,22 @@ unsafe fn on_link(hwnd: HWND, data: &PageData, nm: *const NMHDR) {
     }
 }
 
-unsafe fn glyph_brush(hdc: HDC, data: &PageData) -> isize {
-    SetTextColor(hdc, outcome_color(data.outcome.get()));
+/// Statics drawn over the themed page background; the colour is None to keep the default.
+unsafe fn static_color(id: u16, data: &PageData) -> Option<Option<COLORREF>> {
+    match id {
+        IDC_GLYPH => Some(Some(outcome_color(data.outcome.get()))),
+        IDC_REPO if data.tone.get() == Tone::Bad => Some(Some(outcome_color(Outcome::Bad))),
+        IDC_REPO => Some(Some(COLORREF(GetSysColor(COLOR_WINDOWTEXT)))),
+        IDC_EXPLAIN | IDC_CONSENT | IDC_RATE => Some(Some(outcome_color(Outcome::Neutral))),
+        _ => None,
+    }
+}
+
+unsafe fn themed_static(ctl: HWND, hdc: HDC, color: Option<COLORREF>) -> isize {
+    let _ = DrawThemeParentBackground(ctl, hdc, None);
+    if let Some(c) = color {
+        SetTextColor(hdc, c);
+    }
     SetBkMode(hdc, TRANSPARENT);
     GetStockObject(NULL_BRUSH).0 as isize
 }
@@ -599,6 +748,14 @@ unsafe fn on_update(hwnd: HWND, data: &PageData) {
     {
         let mut ui = data.ui.borrow_mut();
         for event in events {
+            if let Event::Finished {
+                result: Ok(report), ..
+            } = &event
+            {
+                if let Some(rate) = Rate::from_report(report) {
+                    ui.rate = Some(rate);
+                }
+            }
             ui.state = std::mem::replace(&mut ui.state, State::Idle).apply(event);
         }
     }
@@ -629,18 +786,21 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     on_link(hwnd, data, lparam.0 as *const NMHDR);
                 }
             }
+            WM_DRAWITEM => {
+                let item = (lparam.0 as *const DRAWITEMSTRUCT).as_ref();
+                if let (Some(data), Some(item)) = (data_of(hwnd), item) {
+                    if item.CtlID == u32::from(IDC_ICON) {
+                        draw_icon(data, item);
+                        return 1;
+                    }
+                }
+            }
             WM_CTLCOLORSTATIC => {
                 let ctl = HWND(lparam.0 as *mut _);
                 if let Some(data) = data_of(hwnd) {
-                    let id = GetDlgCtrlID(ctl);
-                    if id == i32::from(IDC_GLYPH) {
-                        return glyph_brush(HDC(wparam.0 as *mut _), data);
-                    }
-                    if id == i32::from(IDC_ICON) {
-                        let hdc = HDC(wparam.0 as *mut _);
-                        let _ = DrawThemeParentBackground(ctl, hdc, None);
-                        SetBkMode(hdc, TRANSPARENT);
-                        return GetStockObject(NULL_BRUSH).0 as isize;
+                    let id = u16::try_from(GetDlgCtrlID(ctl)).unwrap_or(0);
+                    if let Some(color) = static_color(id, data) {
+                        return themed_static(ctl, HDC(wparam.0 as *mut _), color);
                     }
                 }
             }

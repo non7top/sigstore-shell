@@ -1,6 +1,6 @@
 //! The property page layout as an in-memory DLGTEMPLATE, so the DLL needs no resource file.
 
-pub const IDC_CLAIM: u16 = 101;
+pub const IDC_REPO: u16 = 101;
 pub const IDC_HEADLINE: u16 = 102;
 pub const IDC_DETAILS: u16 = 103;
 pub const IDC_CONSENT: u16 = 104;
@@ -9,8 +9,8 @@ pub const IDC_PROGRESS_TEXT: u16 = 106;
 pub const IDC_VERIFY: u16 = 107;
 pub const IDC_CANCEL: u16 = 108;
 pub const IDC_GLYPH: u16 = 109;
-pub const IDC_SUMMARY: u16 = 110;
-pub const IDC_DETAILS_LABEL: u16 = 111;
+pub const IDC_REPO_NOTE: u16 = 110;
+pub const IDC_EXPLAIN: u16 = 111;
 pub const IDC_COPY_SHA: u16 = 112;
 pub const IDC_COPY_SIGNER: u16 = 113;
 /// SysLink controls are created in code, so the page still opens where the class is missing.
@@ -18,6 +18,16 @@ pub const IDC_LINKS: u16 = 114;
 pub const IDC_FOOTER: u16 = 115;
 /// Shows the outcome icon; the text glyph control takes over when high contrast is on.
 pub const IDC_ICON: u16 = 116;
+pub const IDC_RATE: u16 = 117;
+pub const IDC_SEPARATOR: u16 = 118;
+
+pub const MARGIN: i16 = 7;
+pub const CONTENT_WIDTH: i16 = 238;
+pub const VERDICT_ROW: i16 = 40;
+pub const REPO_ROW: i16 = 15;
+pub const REPO_WIDTH: i16 = 153;
+
+pub const ICON_SLOT: i16 = 17;
 
 /// RT_GROUP_ICON ids written by build.rs.
 pub const ICON_VERIFIED: u16 = 201;
@@ -25,15 +35,15 @@ pub const ICON_FAILED: u16 = 202;
 pub const ICON_NEUTRAL: u16 = 203;
 pub const ICON_WARNING: u16 = 204;
 
-pub const LINKS_RECT: (i16, i16, i16, i16) = (24, 62, 221, 10);
-pub const FOOTER_RECT: (i16, i16, i16, i16) = (7, 199, 238, 18);
+pub const LINKS_RECT: (i16, i16, i16, i16) = (7, 66, 238, 10);
+pub const FOOTER_RECT: (i16, i16, i16, i16) = (7, 197, 238, 19);
+pub const HEADLINE_RECT: (i16, i16, i16, i16) = (MARGIN, VERDICT_ROW, CONTENT_WIDTH, 24);
 
 const WS_CHILD: u32 = 0x4000_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
 const WS_TABSTOP: u32 = 0x0001_0000;
 const WS_BORDER: u32 = 0x0080_0000;
 const WS_VSCROLL: u32 = 0x0020_0000;
-const WS_HSCROLL: u32 = 0x0010_0000;
 const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
 const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 const DS_3DLOOK: u32 = 0x0004;
@@ -41,10 +51,11 @@ const DS_SETFONT: u32 = 0x0040;
 const DS_CONTROL: u32 = 0x0400;
 const SS_NOPREFIX: u32 = 0x0080;
 const SS_CENTER: u32 = 0x0001;
-const SS_ICON: u32 = 0x0003;
+const SS_OWNERDRAW: u32 = 0x000D;
+const SS_ETCHEDHORZ: u32 = 0x0010;
+const SS_ENDELLIPSIS: u32 = 0x4000;
 const ES_MULTILINE: u32 = 0x0004;
 const ES_AUTOVSCROLL: u32 = 0x0040;
-const ES_AUTOHSCROLL: u32 = 0x0080;
 const ES_READONLY: u32 = 0x0800;
 const BS_DEFPUSHBUTTON: u32 = 0x0001;
 const PBS_MARQUEE: u32 = 0x0008;
@@ -89,15 +100,48 @@ fn items() -> Vec<Item> {
     };
     let label = |id, style, rect| item(Class::Static, "", id, style | SS_NOPREFIX, rect);
     vec![
-        label(IDC_CLAIM, vis, (7, 6, 238, 17)),
+        item(
+            Class::Button,
+            "Verify",
+            IDC_VERIFY,
+            vis | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            (165, 13, 80, 14),
+        ),
+        item(
+            Class::Button,
+            "Cancel",
+            IDC_CANCEL,
+            WS_CHILD | WS_TABSTOP,
+            (165, 13, 80, 14),
+        ),
+        item(
+            Class::Static,
+            "Provenance: where this file came from, which repo and which workflow published it.",
+            IDC_EXPLAIN,
+            vis | SS_NOPREFIX,
+            (7, 3, 238, 9),
+        ),
+        label(
+            IDC_REPO,
+            vis | SS_ENDELLIPSIS,
+            (7, REPO_ROW, REPO_WIDTH, 12),
+        ),
+        label(IDC_REPO_NOTE, vis, (7, 28, 238, 9)),
         Item {
             ex_style: WS_EX_TRANSPARENT,
-            ..label(IDC_GLYPH, vis | SS_CENTER, (7, 25, 14, 20))
+            ..label(IDC_GLYPH, WS_CHILD | SS_CENTER, (7, 14, 14, 14))
         },
-        label(IDC_ICON, vis | SS_ICON, (7, 25, 14, 14)),
-        label(IDC_HEADLINE, vis, (24, 26, 221, 24)),
-        label(IDC_SUMMARY, vis, (24, 52, 221, 9)),
-        label(IDC_DETAILS_LABEL, WS_CHILD, (7, 75, 238, 9)),
+        label(IDC_ICON, WS_CHILD | SS_OWNERDRAW, (7, 14, 16, 16)),
+        label(IDC_HEADLINE, vis, HEADLINE_RECT),
+        label(IDC_CONSENT, vis, (7, VERDICT_ROW, 238, 24)),
+        item(
+            Class::Named("msctls_progress32"),
+            "",
+            IDC_PROGRESS,
+            WS_CHILD | PBS_MARQUEE,
+            (7, 66, 238, 8),
+        ),
+        label(IDC_PROGRESS_TEXT, vis, (7, 76, 238, 10)),
         item(
             Class::Edit,
             "",
@@ -106,49 +150,32 @@ fn items() -> Vec<Item> {
                 | WS_TABSTOP
                 | WS_BORDER
                 | WS_VSCROLL
-                | WS_HSCROLL
                 | ES_MULTILINE
                 | ES_AUTOVSCROLL
-                | ES_AUTOHSCROLL
                 | ES_READONLY,
-            (7, 85, 238, 92),
-        ),
-        label(IDC_CONSENT, vis, (7, 85, 238, 30)),
-        item(
-            Class::Named("msctls_progress32"),
-            "",
-            IDC_PROGRESS,
-            WS_CHILD | PBS_MARQUEE,
-            (7, 119, 238, 8),
-        ),
-        label(IDC_PROGRESS_TEXT, vis, (7, 129, 238, 10)),
-        item(
-            Class::Button,
-            "Verify",
-            IDC_VERIFY,
-            vis | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            (7, 181, 52, 14),
-        ),
-        item(
-            Class::Button,
-            "Cancel",
-            IDC_CANCEL,
-            WS_CHILD | WS_TABSTOP,
-            (62, 181, 52, 14),
+            (7, 78, 238, 84),
         ),
         item(
             Class::Button,
             "Copy SHA-256",
             IDC_COPY_SHA,
             WS_CHILD | WS_TABSTOP,
-            (62, 181, 62, 14),
+            (7, 165, 62, 14),
         ),
         item(
             Class::Button,
             "Copy signer",
             IDC_COPY_SIGNER,
             WS_CHILD | WS_TABSTOP,
-            (127, 181, 56, 14),
+            (73, 165, 56, 14),
+        ),
+        label(IDC_RATE, vis, (7, 181, 238, 9)),
+        item(
+            Class::Static,
+            "",
+            IDC_SEPARATOR,
+            vis | SS_ETCHEDHORZ,
+            (7, 194, 238, 1),
         ),
     ]
 }
@@ -224,7 +251,7 @@ mod tests {
             at += 2 + 2;
         }
         assert_eq!(at, b.len());
-        assert_eq!(ids[0], IDC_CLAIM);
+        assert_eq!(ids[0], IDC_VERIFY);
     }
 
     #[test]
@@ -256,7 +283,8 @@ mod tests {
             IDC_PROGRESS,
             IDC_CANCEL,
             IDC_DETAILS,
-            IDC_DETAILS_LABEL,
+            IDC_GLYPH,
+            IDC_ICON,
             IDC_COPY_SHA,
             IDC_COPY_SIGNER,
         ];

@@ -31,16 +31,18 @@ Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provi
 
 ## Explorer extension
 
-A native 64-bit COM DLL (`crates/sigstore-shell-ext`, Rust) that adds a **Sigstore** tab to the Properties of a single selected `.exe`.
+A native 64-bit COM DLL (`crates/sigstore-shell-ext`, Rust) that adds a **Provenance** tab to the Properties of a single selected `.exe`.
 
 - Opening the tab reads `ProvenanceRepo` from the file and shows it as "claimed, not verified", or "no provenance information in this file". No hashing, no network.
 - **Verify** hashes the file, asks GitHub for the attestation and verifies it. It runs on a worker thread with a progress bar and a Cancel button. Pressing it is the consent to send the file's SHA-256 to `api.github.com` (and to download Sigstore's trust root). After a result the consent sentence goes away and the button reads **Verify again**.
-- The result is laid out top down: an icon (green tick, red cross, grey dash for "no attestation" which does not mean unsafe, grey warning for a failed lookup) beside the verdict, then `repo @ short commit`, then links, then a details box (owner, workflow, full commit, ref, signing time, signer, who answered, SHA-256) in a monospace font that scrolls sideways instead of wrapping. With high contrast on, the icon is replaced by a text symbol in the system text colour.
+- The tab opens with one muted line explaining the word "provenance" (where the file came from: which repo and which workflow published it), then the claimed repository in bold with **Verify** at the top right. The consent sentence sits under it until a result exists.
+- The button shows GitHub's request count (`Verify  52/60`) only after a lookup in that tab, taken from that response's headers. It is never stored, so a freshly opened tab says plain `Verify`; a cached answer leaves it unchanged. The count is per IP and shared with other tools; the button's tooltip says so. Under the result a muted line gives the reset time, or says the answer came from the cache and when.
+- After a result the repository shown is the one in the certificate (bold, red if it differs from the file's claim, with the claim named below it), with the outcome icon (green tick, red cross, grey dash for "no attestation", which does not mean unsafe, grey warning for a failed lookup) and the verdict. When GitHub's limit is nearly used up or used up, the verdict says so. The details box (owner, workflow, full commit, ref, signing time, signer, who answered, SHA-256) is monospace and wrapped at path separators, so it needs no sideways scrolling. With high contrast on, the icon is replaced by a text symbol in the system text colour.
 - Links (commit, workflow file at that commit, build run) open only when clicked, and only for a verified result. Each URL is rebuilt from a validated `owner/repo`, a hex commit and a workflow path directly under `.github/workflows/`; a build-run URL is accepted only if it is this repo's `actions/runs/<id>` page. Anything else gets no link. **Copy SHA-256** and **Copy signer** put the full values on the clipboard.
 - The bottom line says what the check rests on, with links to sigstore.dev and to this project. Icon sources and licences are in [resources/icons/README.md](../resources/icons/README.md).
 - Results are cached by file hash in `%LOCALAPPDATA%\sigstore-shell\cache` (verified and mismatch for 7 days, "no attestation" for 1 hour; failures are never cached). A cached answer still needs the file hashed again.
 - Rekor v1 search is off. To enable it, create `%LOCALAPPDATA%\sigstore-shell\settings.json` containing `{"rekor": true}`. The tab then states that the hash also goes to `rekor.sigstore.dev`, and files with no embedded repo become verifiable.
-- No GitHub token is used, so the unauthenticated limit (60 requests per hour per IP) applies; the cache keeps repeat checks off the API.
+- No GitHub token is used, so the unauthenticated limit (60 requests per hour per IP) applies; the cache keeps repeat checks off the API. A 5xx answer from GitHub is retried once after about a second (noted in the details); 4xx and rate limiting are not retried.
 
 ### Build
 
@@ -83,7 +85,7 @@ copy installer\register.ps1, installer\unregister.ps1 "C:\Program Files\sigstore
 & "C:\Program Files\sigstore-shell\register.ps1"
 ```
 
-Then open the Properties of an `.exe` and look for the Sigstore tab. To remove it run `unregister.ps1`; Explorer keeps the DLL loaded until it restarts, so restart Explorer (or sign out) before deleting the file.
+Then open the Properties of an `.exe` and look for the Provenance tab. To remove it run `unregister.ps1`; Explorer keeps the DLL loaded until it restarts, so restart Explorer (or sign out) before deleting the file.
 
 `register.ps1` calls `regsvr32`, which writes, under `HKLM\Software\Classes`, the CLSID with its `InprocServer32` and the handler key `exefile\shellex\PropertySheetHandlers\SigstoreShell`, and adds the CLSID to `HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved`. `installer/sigstore-shell.nsi` writes the same keys with NSIS registry instructions, so the installer never has to load the DLL; a unit test in `registration.rs` checks the script still names the same CLSID and handler key. `make installer` builds it with plain `makensis` on Linux, no Wine, because the uninstaller is only written, not run. Each release also ships `sigstore-shell-Setup-<version>.exe`, carrying the same `ProvenanceRepo` claim as the DLL.
 

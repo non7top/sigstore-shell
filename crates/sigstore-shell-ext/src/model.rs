@@ -110,40 +110,150 @@ impl Outcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Normal,
+    Bad,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
-    pub claim_line: String,
+    /// Bold repository name: the file's claim, or after a result the certificate's repository.
+    pub repo: String,
+    pub repo_tone: Tone,
+    /// Normal-weight text under the repo: "(claimed, not verified)", `@ short-commit`, or why there is no repo.
+    pub repo_note: String,
     pub outcome: Outcome,
     pub headline: String,
-    /// `repo @ short-commit`, only for a certificate that names both.
-    pub summary: String,
     pub links: Vec<Link>,
     pub rows: Vec<(String, String)>,
     pub notes: Vec<String>,
+    /// Reset time of the GitHub window, or that the answer came from the cache.
+    pub rate_line: Option<String>,
     pub sha256: Option<String>,
     pub signer: Option<String>,
     pub consent: String,
     pub show_consent: bool,
-    pub verify_label: &'static str,
+    pub verify_label: String,
     pub can_verify: bool,
     pub running: bool,
     pub progress_text: String,
 }
 
-const LABEL_WIDTH: usize = 13;
+/// GitHub's count from the last fresh response seen by this tab; never stored anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rate {
+    pub limit: u64,
+    pub remaining: u64,
+}
+
+impl Rate {
+    /// None for cache hits (their headers are old) and for answers without both numbers.
+    pub fn from_report(report: &Report) -> Option<Self> {
+        if is_cached(report) {
+            return None;
+        }
+        let r = report.rate_limit.as_ref()?;
+        Some(Self {
+            limit: r.limit?,
+            remaining: r.remaining?,
+        })
+    }
+}
+
+const CACHED_NOTE: &str = "Result cached from a check on ";
+
+fn is_cached(report: &Report) -> bool {
+    report.notes.iter().any(|n| n.starts_with(CACHED_NOTE))
+}
+
+/// The cache note carries UTC (`2026-10-08 04:24:11 UTC.`); show it in local time.
+fn cached_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
+    let note = report.notes.iter().find(|n| n.starts_with(CACHED_NOTE))?;
+    let stamp = note[CACHED_NOTE.len()..]
+        .trim_end_matches('.')
+        .trim_end_matches(" UTC");
+    let when = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", stamp)
+        .ok()
+        .and_then(|d| d.to_zoned(jiff::tz::TimeZone::UTC).ok())
+        .map(|z| {
+            z.with_time_zone(tz.clone())
+                .strftime("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| stamp.to_string());
+    Some(format!("Cached result from {when}; no GitHub request used"))
+}
+
+/// Everything besides the file's own state that the view depends on.
+#[derive(Debug, Clone)]
+pub struct Env {
+    pub rate: Option<Rate>,
+    pub tz: jiff::tz::TimeZone,
+}
+
+impl Env {
+    pub fn local(rate: Option<Rate>) -> Self {
+        Self {
+            rate,
+            tz: jiff::tz::TimeZone::system(),
+        }
+    }
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self {
+            rate: None,
+            tz: jiff::tz::TimeZone::UTC,
+        }
+    }
+}
+
+/// Characters that fit on a details line in the monospace box without wrapping.
+const LINE_WIDTH: usize = 52;
+const LABEL_WIDTH: usize = 11;
+
+/// Breaks after the last `/`, `@` or space that fits, so URLs split at path separators.
+fn wrap_value(value: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while chars.len() - start > width {
+        let window = &chars[start..start + width];
+        let cut = window
+            .iter()
+            .rposition(|c| matches!(c, '/' | '@' | ' '))
+            .map_or(width, |i| i + 1);
+        out.push(chars[start..start + cut].iter().collect());
+        start += cut;
+    }
+    out.push(chars[start..].iter().collect());
+    out
+}
+
+fn push_row(lines: &mut Vec<String>, key: &str, value: &str) {
+    let label = format!("{key}:");
+    let pad = LABEL_WIDTH.max(label.len() + 1);
+    if pad + value.chars().count() <= LINE_WIDTH {
+        lines.push(format!("{label:<pad$}{value}"));
+        return;
+    }
+    lines.push(label);
+    let parts = if key == "SHA-256" && value.len() == 64 {
+        vec![value[..32].to_string(), value[32..].to_string()]
+    } else {
+        wrap_value(value, LINE_WIDTH - 2)
+    };
+    lines.extend(parts.into_iter().map(|p| format!("  {p}")));
+}
 
 impl View {
     /// Text for the read-only details box, with CRLF as Win32 edit controls expect.
     pub fn details_text(&self) -> String {
         let mut lines = Vec::new();
         for (k, v) in &self.rows {
-            if k == "SHA-256" && v.len() == 64 && v.is_ascii() {
-                lines.push(format!("{k}:"));
-                lines.push(format!("  {}", &v[..32]));
-                lines.push(format!("  {}", &v[32..]));
-            } else {
-                lines.push(format!("{:<LABEL_WIDTH$}{v}", format!("{k}:")));
-            }
+            push_row(&mut lines, k, v);
         }
         lines.extend(self.notes.iter().map(|n| format!("Note: {n}")));
         lines.join("\r\n")
@@ -161,6 +271,33 @@ impl View {
             .collect::<Vec<_>>()
             .join("   ")
     }
+}
+
+const LOW_REMAINING: u64 = 10;
+
+fn reset_clock(epoch: u64, tz: &jiff::tz::TimeZone) -> Option<String> {
+    let ts = jiff::Timestamp::from_second(i64::try_from(epoch).ok()?).ok()?;
+    Some(ts.to_zoned(tz.clone()).strftime("%H:%M").to_string())
+}
+
+/// Plain label until a lookup in this tab has shown the count, then e.g. "Verify  52/60".
+pub fn verify_label(base: &str, rate: Option<Rate>) -> String {
+    match rate {
+        Some(r) => format!("{base}  {}/{}", r.remaining, r.limit),
+        None => base.to_string(),
+    }
+}
+
+/// The count is per IP and shared with other tools, so it is never worded as this app's own quota.
+fn rate_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
+    if is_cached(report) {
+        return cached_line(report, tz);
+    }
+    if matches!(report.provider.as_deref(), Some(p) if p != "github") {
+        return None;
+    }
+    let at = reset_clock(report.rate_limit.as_ref()?.reset_epoch?, tz)?;
+    Some(format!("GitHub API limit (this IP) resets at {at}"))
 }
 
 pub fn provider_label(name: &str) -> &str {
@@ -187,17 +324,21 @@ pub fn format_epoch(secs: u64) -> String {
         .map_or_else(|| secs.to_string(), |t| format_time(&t.to_string()))
 }
 
-fn claim_line(claim: &Claim) -> String {
+fn claim_parts(claim: &Claim) -> (String, String) {
     match claim {
-        Claim::Absent => "No provenance information in this file.".into(),
-        Claim::Unreadable => {
-            "No provenance information in this file (its version information could not be read)."
-                .into()
-        }
-        Claim::Repo(r) => format!("Claimed repository: {r}\r\n(claimed, not verified)"),
-        Claim::Invalid(c) => {
-            format!("Claimed repository: {c}\r\n(claimed, not verified; not a valid owner/repo)")
-        }
+        Claim::Absent => (
+            String::new(),
+            "No provenance information in this file.".into(),
+        ),
+        Claim::Unreadable => (
+            String::new(),
+            "No provenance information in this file (could not read it).".into(),
+        ),
+        Claim::Repo(r) => (r.clone(), "(claimed, not verified)".into()),
+        Claim::Invalid(c) => (
+            c.clone(),
+            "(claimed, not verified; not a valid owner/repo)".into(),
+        ),
     }
 }
 
@@ -233,12 +374,13 @@ fn identity_rows(id: &Identity) -> Vec<(String, String)> {
 struct Done {
     outcome: Outcome,
     headline: String,
-    summary: String,
+    /// Set when the certificate names a repository to show instead of the claim.
+    repo: Option<(String, Tone, String)>,
     links: Vec<Link>,
     rows: Vec<(String, String)>,
 }
 
-fn done_view(report: &Report, claim: &Claim) -> Done {
+fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
     let mut rows = Vec::new();
     let mut outcome = Outcome::Bad;
     let headline = match report.status {
@@ -268,14 +410,21 @@ fn done_view(report: &Report, claim: &Claim) -> Done {
         }
         Status::LookupFailed => {
             outcome = Outcome::Warn;
-            let limited = report
-                .rate_limit
-                .as_ref()
-                .is_some_and(|r| r.remaining == Some(0));
-            if limited {
-                "Lookup failed: GitHub's request limit is used up. Try again later.".to_string()
-            } else {
-                "Lookup failed: could not tell whether an attestation exists.".to_string()
+            let rate = report.rate_limit.as_ref();
+            let left = rate.and_then(|r| r.remaining);
+            match left {
+                Some(0) => {
+                    let again = rate
+                        .and_then(|r| r.reset_epoch)
+                        .and_then(|e| reset_clock(e, &env.tz))
+                        .map_or(String::new(), |t| format!(" after {t}"));
+                    format!("Lookup failed: GitHub's request limit is used up. Try again{again}.")
+                }
+                Some(n) if n <= LOW_REMAINING => format!(
+                    "Lookup failed: could not tell whether an attestation exists. \
+                     Only {n} GitHub requests are left this hour for this IP."
+                ),
+                _ => "Lookup failed: could not tell whether an attestation exists.".to_string(),
             }
         }
         Status::VerificationFailed => {
@@ -287,15 +436,24 @@ fn done_view(report: &Report, claim: &Claim) -> Done {
             "Nothing was looked up.".to_string()
         }
     };
-    let mut summary = String::new();
+    let mut repo = None;
     let mut links = Vec::new();
     if let Some(id) = &report.identity {
         rows.extend(identity_rows(id));
-        if matches!(report.status, Status::Verified | Status::Mismatch) {
-            if let (Some(repo), Some(commit)) = (&id.repo, &id.commit) {
-                if let Some(short) = short_commit(commit) {
-                    summary = format!("{repo} @ {short}");
+        if let Some(cert_repo) = &id.repo {
+            let short = id.commit.as_deref().and_then(short_commit);
+            let note = short.map_or(String::new(), |c| format!("@ {c}"));
+            match report.status {
+                Status::Verified => repo = Some((cert_repo.clone(), Tone::Normal, note)),
+                Status::Mismatch => {
+                    let claimed = claim
+                        .repo()
+                        .or(report.queried_repo.as_deref())
+                        .unwrap_or("?");
+                    let note = format!("signed for this repository; the file claims {claimed}");
+                    repo = Some((cert_repo.clone(), Tone::Bad, note));
                 }
+                _ => {}
             }
         }
         if report.status == Status::Verified {
@@ -309,7 +467,7 @@ fn done_view(report: &Report, claim: &Claim) -> Done {
     Done {
         outcome,
         headline,
-        summary,
+        repo,
         links,
         rows,
     }
@@ -344,21 +502,28 @@ fn build_links(id: &Identity) -> Vec<Link> {
 }
 
 pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
+    view_in(claim, state, rekor, &Env::default())
+}
+
+pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
     let can_search = claim.repo().is_some() || rekor;
     let running = state.is_running();
+    let (repo, repo_note) = claim_parts(claim);
     let mut v = View {
-        claim_line: claim_line(claim),
+        repo,
+        repo_tone: Tone::Normal,
+        repo_note,
         outcome: Outcome::None,
         headline: String::new(),
-        summary: String::new(),
         links: Vec::new(),
         rows: Vec::new(),
         notes: Vec::new(),
+        rate_line: None,
         sha256: None,
         signer: None,
         consent: consent(rekor),
         show_consent: true,
-        verify_label: "Verify",
+        verify_label: verify_label("Verify", env.rate),
         can_verify: can_search && !running,
         running,
         progress_text: String::new(),
@@ -368,10 +533,9 @@ pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
             v.headline = "Nothing to look up: this file names no repository and Rekor search \
                 is off."
                 .into();
+            v.show_consent = false;
         }
-        State::Idle => {
-            v.headline = "Not checked yet. Press Verify to look up this file's attestation.".into();
-        }
+        State::Idle => {}
         State::Running { phase, .. } => {
             v.headline = "Verifying...".into();
             v.progress_text = match phase {
@@ -380,24 +544,34 @@ pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
             };
         }
         State::Done(report) => {
-            let d = done_view(report, claim);
+            let d = done_view(report, claim, env);
+            if let Some((repo, tone, note)) = d.repo {
+                v.repo = repo;
+                v.repo_tone = tone;
+                v.repo_note = note;
+            }
             v.outcome = d.outcome;
             v.headline = d.headline;
-            v.summary = d.summary;
             v.links = d.links;
             v.rows = d.rows;
-            v.notes = report.notes.clone();
+            v.notes = report
+                .notes
+                .iter()
+                .filter(|n| !n.starts_with(CACHED_NOTE))
+                .cloned()
+                .collect();
+            v.rate_line = rate_line(report, &env.tz);
             v.sha256 = Some(report.file_sha256.clone());
             v.signer = report.identity.as_ref().and_then(|i| i.san.clone());
             v.show_consent = false;
-            v.verify_label = "Verify again";
+            v.verify_label = verify_label("Verify again", env.rate);
         }
         State::Cancelled => v.headline = "Cancelled. Nothing was verified.".into(),
         State::Failed(e) => {
             v.outcome = Outcome::Warn;
             v.headline = format!("Could not verify: {e}");
             v.show_consent = false;
-            v.verify_label = "Verify again";
+            v.verify_label = verify_label("Verify again", env.rate);
         }
     }
     v
@@ -468,8 +642,11 @@ mod tests {
             &State::Idle,
             false,
         );
-        assert!(v.claim_line.contains("non7top/promptloom"));
-        assert!(v.claim_line.contains("claimed, not verified"));
+        assert_eq!(v.repo, "non7top/promptloom");
+        assert_eq!(v.repo_tone, Tone::Normal);
+        assert_eq!(v.repo_note, "(claimed, not verified)");
+        assert_eq!(v.headline, "");
+        assert!(v.show_consent);
         assert!(v.can_verify);
         assert!(v.rows.is_empty());
     }
@@ -477,7 +654,8 @@ mod tests {
     #[test]
     fn no_claim_says_so_and_cannot_verify_without_rekor() {
         let v = view(&Claim::Absent, &State::Idle, false);
-        assert_eq!(v.claim_line, "No provenance information in this file.");
+        assert_eq!(v.repo, "");
+        assert_eq!(v.repo_note, "No provenance information in this file.");
         assert!(!v.can_verify);
         assert!(view(&Claim::Absent, &State::Idle, true).can_verify);
     }
@@ -485,7 +663,7 @@ mod tests {
     #[test]
     fn an_invalid_claim_is_shown_but_not_queried() {
         let v = view(&Claim::Invalid("x".into()), &State::Idle, false);
-        assert!(v.claim_line.contains("not a valid owner/repo"));
+        assert!(v.repo_note.contains("not a valid owner/repo"));
         assert!(!v.can_verify);
     }
 
@@ -524,7 +702,9 @@ mod tests {
         assert_eq!(v.outcome, Outcome::Good);
         assert!(v.headline.starts_with("Verified") && v.headline.contains("checks out"));
         assert!(!v.headline.to_lowercase().contains("safe"));
-        assert_eq!(v.summary, "cli/cli @ fc4b137c");
+        assert_eq!(v.repo, "cli/cli");
+        assert_eq!(v.repo_tone, Tone::Normal);
+        assert_eq!(v.repo_note, "@ fc4b137c");
     }
 
     #[test]
@@ -532,15 +712,37 @@ mod tests {
         let s = State::Done(Box::new(verified()));
         let v = view(&Claim::Repo("cli/cli".into()), &s, false);
         let text = v.details_text();
-        assert!(text.contains("Owner:       cli"));
-        assert!(text.contains("Workflow:    .github/workflows/deployment.yml"));
-        assert!(text.contains("Commit:      fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b"));
-        assert!(text.contains("Ref:         refs/heads/trunk"));
-        assert!(text.contains("Signed:      2026-09-30 12:34:56 UTC"));
-        assert!(text.contains("Signer:      https://github.com/cli/cli/"));
+        assert!(text.contains("Owner:     cli"));
+        assert!(text.contains("Workflow:  .github/workflows/deployment.yml"));
+        assert!(text.contains("Commit:    fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b"));
+        assert!(text.contains("Ref:       refs/heads/trunk"));
+        assert!(text.contains("Signed:    2026-09-30 12:34:56 UTC"));
+        assert!(text.contains("Signer:\r\n  https://github.com/cli/cli/"));
         assert!(text.contains("Answered by: GitHub attestations"));
         assert!(!text.contains("Repository"));
         assert!(text.contains("\r\n"));
+    }
+
+    #[test]
+    fn no_details_line_is_wider_than_the_box() {
+        let mut r = verified();
+        r.identity.as_mut().unwrap().san = Some(format!("https://github.com/{}", "a/".repeat(60)));
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        for line in v.details_text().split("\r\n") {
+            assert!(line.chars().count() <= LINE_WIDTH, "{line}");
+        }
+    }
+
+    #[test]
+    fn wrap_value_breaks_at_separators_and_never_loses_text() {
+        let url =
+            "https://github.com/non7top/promptloom/.github/workflows/release.yml@refs/heads/master";
+        let parts = wrap_value(url, 50);
+        assert_eq!(parts.concat(), url);
+        assert!(parts.iter().all(|p| p.chars().count() <= 50));
+        assert!(parts[0].ends_with('/'));
+        assert_eq!(wrap_value(&"x".repeat(120), 50).concat(), "x".repeat(120));
+        assert_eq!(wrap_value("short", 50), ["short"]);
     }
 
     #[test]
@@ -605,6 +807,7 @@ mod tests {
         let before = view(&Claim::Repo("cli/cli".into()), &State::Idle, false);
         assert!(before.show_consent);
         assert_eq!(before.verify_label, "Verify");
+        assert_eq!(before.headline, "");
         assert_eq!(before.outcome, Outcome::None);
         let done = view(
             &Claim::Repo("cli/cli".into()),
@@ -641,6 +844,9 @@ mod tests {
             false,
         );
         assert!(v.headline.contains("evil/repo") && v.headline.contains("cli/cli"));
+        assert_eq!(v.repo, "cli/cli");
+        assert_eq!(v.repo_tone, Tone::Bad);
+        assert!(v.repo_note.contains("evil/repo"));
     }
 
     #[test]
@@ -663,6 +869,171 @@ mod tests {
         };
         let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
         assert!(v.headline.contains("request limit"));
+    }
+
+    fn limited(remaining: Option<u64>, reset: Option<u64>) -> Report {
+        Report {
+            rate_limit: Some(RateLimit {
+                limit: Some(60),
+                remaining,
+                reset_epoch: reset,
+                resource: Some("core".into()),
+            }),
+            ..report(Status::NoAttestation)
+        }
+    }
+
+    // 2026-10-08 05:42:00 UTC
+    const RESET: u64 = 1_791_438_120;
+
+    fn headline(r: Report) -> String {
+        view_in(
+            &Claim::Absent,
+            &State::Done(Box::new(r)),
+            true,
+            &Env::default(),
+        )
+        .headline
+    }
+
+    #[test]
+    fn rate_line_is_only_the_reset_time_in_local_time() {
+        let utc = jiff::tz::TimeZone::UTC;
+        let r = limited(Some(52), Some(RESET));
+        assert_eq!(
+            rate_line(&r, &utc).unwrap(),
+            "GitHub API limit (this IP) resets at 05:42"
+        );
+        let plus2 = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
+        assert!(rate_line(&r, &plus2).unwrap().ends_with("07:42"));
+    }
+
+    #[test]
+    fn rate_line_without_headers_shows_nothing() {
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(rate_line(&report(Status::LookupFailed), &utc), None);
+        assert_eq!(rate_line(&limited(Some(5), None), &utc), None);
+    }
+
+    #[test]
+    fn cached_result_says_no_request_was_used() {
+        let mut r = limited(Some(52), Some(RESET));
+        r.notes
+            .push("Result cached from a check on 2026-10-08 04:24:11 UTC.".into());
+        assert_eq!(
+            rate_line(&r, &jiff::tz::TimeZone::UTC).unwrap(),
+            "Cached result from 2026-10-08 04:24; no GitHub request used"
+        );
+        let plus2 = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
+        assert!(rate_line(&r, &plus2).unwrap().contains("06:24"));
+        let v = view_in(
+            &Claim::Absent,
+            &State::Done(Box::new(r)),
+            true,
+            &Env::default(),
+        );
+        assert!(v.notes.is_empty());
+    }
+
+    #[test]
+    fn a_retry_note_stays_in_the_details_box() {
+        let mut r = limited(Some(52), Some(RESET));
+        r.notes
+            .push("github: the server returned an error; retried once".into());
+        let v = view_in(
+            &Claim::Absent,
+            &State::Done(Box::new(r)),
+            true,
+            &Env::default(),
+        );
+        assert!(v.details_text().contains("retried once"));
+    }
+
+    #[test]
+    fn rekor_answers_get_no_github_line() {
+        let mut r = limited(Some(52), Some(RESET));
+        r.provider = Some("rekor-v1".into());
+        assert_eq!(rate_line(&r, &jiff::tz::TimeZone::UTC), None);
+    }
+
+    #[test]
+    fn exhausted_and_low_quota_are_spelled_out_next_to_the_verdict() {
+        let failed = |rem, reset| Report {
+            status: Status::LookupFailed,
+            ..limited(rem, reset)
+        };
+        assert_eq!(
+            headline(failed(Some(0), Some(RESET))),
+            "Lookup failed: GitHub's request limit is used up. Try again after 05:42."
+        );
+        assert_eq!(
+            headline(failed(Some(0), None)),
+            "Lookup failed: GitHub's request limit is used up. Try again."
+        );
+        assert!(headline(failed(Some(3), None))
+            .contains("Only 3 GitHub requests are left this hour for this IP"));
+        assert!(headline(failed(Some(10), None)).contains("Only 10"));
+        assert!(!headline(failed(Some(11), None)).contains("Only"));
+        assert_eq!(
+            headline(failed(None, None)),
+            "Lookup failed: could not tell whether an attestation exists."
+        );
+    }
+
+    #[test]
+    fn verify_button_label_carries_the_counter() {
+        let rate = |remaining| {
+            Some(Rate {
+                limit: 60,
+                remaining,
+            })
+        };
+        assert_eq!(verify_label("Verify", None), "Verify");
+        assert_eq!(verify_label("Verify", rate(52)), "Verify  52/60");
+        assert_eq!(
+            verify_label("Verify again", rate(51)),
+            "Verify again  51/60"
+        );
+        assert_eq!(verify_label("Verify", rate(0)), "Verify  0/60");
+    }
+
+    #[test]
+    fn only_a_fresh_answer_with_both_numbers_sets_the_counter() {
+        let full = limited(Some(52), Some(RESET));
+        assert_eq!(
+            Rate::from_report(&full),
+            Some(Rate {
+                limit: 60,
+                remaining: 52
+            })
+        );
+        assert_eq!(Rate::from_report(&limited(None, Some(RESET))), None);
+        assert_eq!(Rate::from_report(&report(Status::LookupFailed)), None);
+        let mut cached = full;
+        cached.notes.push("Result cached from a check on x.".into());
+        assert_eq!(Rate::from_report(&cached), None);
+    }
+
+    #[test]
+    fn the_counter_reaches_the_view_label() {
+        let env = Env {
+            rate: Some(Rate {
+                limit: 60,
+                remaining: 51,
+            }),
+            tz: jiff::tz::TimeZone::UTC,
+        };
+        let claim = Claim::Repo("cli/cli".into());
+        assert_eq!(
+            view_in(&claim, &State::Idle, false, &env).verify_label,
+            "Verify  51/60"
+        );
+        let done = State::Done(Box::new(verified()));
+        assert_eq!(
+            view_in(&claim, &done, false, &env).verify_label,
+            "Verify again  51/60"
+        );
+        assert_eq!(view(&claim, &State::Idle, false).verify_label, "Verify");
     }
 
     #[test]
