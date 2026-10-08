@@ -6,7 +6,7 @@ ENV CARGO_HOME=/cargo \
 
 # The posix thread model is what Rust's windows-gnu std expects.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip nsis \
+    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip nsis librsvg2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix \
     && rustup target add x86_64-pc-windows-gnu \

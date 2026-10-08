@@ -12,7 +12,7 @@
 !define NAME "sigstore-shell"
 !define DLL "sigstore_shell_ext.dll"
 !define CLSID "{fbcd8210-9f9c-4b07-900a-ad12500a4363}"
-!define DESCRIPTION "Sigstore property page"
+!define DESCRIPTION "Provenance property page"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${NAME}"
 
 Name "${NAME} ${VERSION}"

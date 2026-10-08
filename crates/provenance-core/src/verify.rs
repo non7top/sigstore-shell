@@ -3,7 +3,7 @@ use crate::github::valid_repo;
 use crate::identity::Identity;
 use crate::provider::{Provider, ProviderError, RateLimit};
 use serde::{Deserialize, Serialize};
-use sigstore_verify::trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_verify::trust_root::{TrustedRoot, TufConfig, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 use sigstore_verify::types::{Bundle, Sha256Hash};
 use sigstore_verify::{VerificationPolicy, Verifier};
 use std::path::Path;
@@ -47,6 +47,12 @@ pub struct Report {
     pub provider: Option<String>,
     /// Present for `verified` and `mismatch`, from the certificate only.
     pub identity: Option<Identity>,
+    /// GitHub's page id for the attestation, from where the bundle was downloaded; a link hint, not verified.
+    #[serde(default)]
+    pub attestation_id: Option<u64>,
+    /// Rekor log index of the verified bundle's first transparency-log entry, if it has one.
+    #[serde(default)]
+    pub log_index: Option<u64>,
     pub rate_limit: Option<RateLimit>,
     pub trust_root: TrustRootSource,
     pub notes: Vec<String>,
@@ -59,10 +65,29 @@ pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), Strin
     }
 }
 
+/// For re-checking a stored bundle with no network: the TUF cache from an earlier online run, which
+/// sigstore-tuf re-verifies from the compiled-in TUF root on every load, else the embedded root.
+pub async fn load_trusted_root_offline() -> Result<(TrustedRoot, TrustRootSource), String> {
+    match TrustedRoot::from_tuf(TufConfig::production().offline()).await {
+        Ok(root) => Ok((root, TrustRootSource::Tuf)),
+        Err(_) => load_embedded_root(),
+    }
+}
+
 pub fn load_embedded_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
         .map(|root| (root, TrustRootSource::Embedded))
         .map_err(|e| format!("no usable Sigstore trust root: {e}"))
+}
+
+/// Index 0 is what an omitted index parses as, and is Rekor's first entry, never ours.
+fn log_index(bundle: &Bundle) -> Option<u64> {
+    bundle
+        .verification_material
+        .tlog_entries
+        .first()
+        .map(|e| e.log_index.get())
+        .filter(|i| *i > 0)
 }
 
 fn same_repo(a: &str, b: &str) -> bool {
@@ -138,6 +163,29 @@ pub async fn verify_digest(
     root: &TrustedRoot,
     root_source: TrustRootSource,
 ) -> Result<Report, String> {
+    verify_digest_keeping_bundle(
+        digest_hex,
+        claimed_repo,
+        notes,
+        options,
+        providers,
+        root,
+        root_source,
+    )
+    .await
+    .map(|(report, _)| report)
+}
+
+/// Like [`verify_digest`], also returning the bundle that verified (for `verified` and `mismatch`).
+pub async fn verify_digest_keeping_bundle(
+    digest_hex: &str,
+    claimed_repo: Option<String>,
+    notes: Vec<String>,
+    options: &Options,
+    providers: &[Box<dyn Provider>],
+    root: &TrustedRoot,
+    root_source: TrustRootSource,
+) -> Result<(Report, Option<Bundle>), String> {
     let digest = Sha256Hash::from_hex(digest_hex).map_err(|e| e.to_string())?;
     let queried_repo = options.repo.clone().or_else(|| claimed_repo.clone());
 
@@ -148,6 +196,8 @@ pub async fn verify_digest(
         queried_repo: queried_repo.clone(),
         provider: None,
         identity: None,
+        attestation_id: None,
+        log_index: None,
         rate_limit: None,
         trust_root: root_source,
         notes,
@@ -172,7 +222,13 @@ pub async fn verify_digest(
             }
             Ok(fetched) => {
                 if fetched.rate_limit.is_some() {
-                    report.rate_limit = fetched.rate_limit;
+                    report.rate_limit = fetched.rate_limit.clone();
+                }
+                if fetched.retried {
+                    report.notes.push(format!(
+                        "{}: the server returned an error; retried once",
+                        provider.name()
+                    ));
                 }
                 if fetched.skipped > 0 {
                     report.notes.push(format!(
@@ -186,7 +242,7 @@ pub async fn verify_digest(
                     continue;
                 }
                 let mut rejected = Vec::new();
-                for bundle in &fetched.bundles {
+                for (i, bundle) in fetched.bundles.iter().enumerate() {
                     match verify_bundle(&verifier, digest, bundle) {
                         Ok(identity) => {
                             if !rejected.is_empty() {
@@ -210,7 +266,9 @@ pub async fn verify_digest(
                                 Status::Verified
                             };
                             report.identity = Some(identity);
-                            return Ok(report);
+                            report.attestation_id = fetched.attestation_id(i);
+                            report.log_index = log_index(bundle);
+                            return Ok((report, Some(bundle.clone())));
                         }
                         Err(e) => {
                             invalid = true;
@@ -237,7 +295,7 @@ pub async fn verify_digest(
     } else {
         Status::NotChecked
     };
-    Ok(report)
+    Ok((report, None))
 }
 
 #[cfg(test)]
@@ -251,7 +309,9 @@ mod tests {
 
     enum Mock {
         Bundle,
+        BundleWithPageId(u64),
         Empty,
+        Retried,
         Fail,
     }
 
@@ -266,7 +326,16 @@ mod tests {
                     bundles: vec![Bundle::from_json(BUNDLE).unwrap()],
                     ..Fetched::default()
                 }),
+                Mock::BundleWithPageId(id) => Ok(Fetched {
+                    bundles: vec![Bundle::from_json(BUNDLE).unwrap()],
+                    attestation_ids: vec![Some(*id)],
+                    ..Fetched::default()
+                }),
                 Mock::Empty => Ok(Fetched::default()),
+                Mock::Retried => Ok(Fetched {
+                    retried: true,
+                    ..Fetched::default()
+                }),
                 Mock::Fail => Err(ProviderError::failed("offline")),
             }
         }
@@ -310,6 +379,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_carries_the_log_index_and_the_page_id_of_the_verified_bundle() {
+        let r = run(Mock::BundleWithPageId(53_806_567), DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::Verified);
+        assert_eq!(r.attestation_id, Some(53_806_567));
+        assert_eq!(r.log_index, Some(3_010_358_693));
+        let plain = run(Mock::Bundle, DIGEST, Some("cli/cli")).await;
+        assert_eq!(plain.attestation_id, None);
+    }
+
+    #[test]
+    fn no_tlog_entry_or_index_zero_gives_no_log_index() {
+        let mut bundle = Bundle::from_json(BUNDLE).unwrap();
+        assert_eq!(log_index(&bundle), Some(3_010_358_693));
+        bundle.verification_material.tlog_entries[0].log_index = Default::default();
+        assert_eq!(log_index(&bundle), None);
+        bundle.verification_material.tlog_entries.clear();
+        assert_eq!(log_index(&bundle), None);
+    }
+
+    #[test]
+    fn reports_from_before_the_new_fields_still_parse() {
+        let old = r#"{"status":"verified","file_sha256":"ab","claimed_repo":null,"queried_repo":null,
+            "provider":null,"identity":null,"rate_limit":null,"trust_root":"tuf","notes":[]}"#;
+        let r: Report = serde_json::from_str(old).unwrap();
+        assert_eq!((r.attestation_id, r.log_index), (None, None));
+    }
+
+    #[tokio::test]
     async fn claim_for_another_repo_is_a_mismatch() {
         let r = run(Mock::Bundle, DIGEST, Some("evil/repo")).await;
         assert_eq!(r.status, Status::Mismatch);
@@ -325,9 +422,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stored_bundle_verifies_like_a_fresh_one_with_no_other_provider() {
+        let (root, src) = load_embedded_root().unwrap();
+        let bundle = Bundle::from_json(BUNDLE).unwrap();
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(crate::StoredBundle::new(
+            "github",
+            bundle,
+            Some(5),
+        ))];
+        let (report, kept) = verify_digest_keeping_bundle(
+            DIGEST,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            src,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.status, Status::Verified);
+        assert_eq!(report.provider.as_deref(), Some("github"));
+        assert_eq!(report.attestation_id, Some(5));
+        assert!(kept.is_some());
+        let other = "00".repeat(32);
+        let (report, kept) = verify_digest_keeping_bundle(
+            &other,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            TrustRootSource::Embedded,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.status, Status::VerificationFailed);
+        assert!(kept.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_stored_provider_name_is_reported_as_cache() {
+        let bundle = Bundle::from_json(BUNDLE).unwrap();
+        let name = crate::StoredBundle::new("evil <b>", bundle, None);
+        assert_eq!(name.name(), "cache");
+    }
+
+    /// Needs the network once: an online load fills the TUF cache, the offline load must then
+    /// serve it through full re-verification. Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs network"]
+    async fn the_offline_root_comes_from_the_verified_tuf_cache_after_an_online_load() {
+        let (_, online) = load_trusted_root().await.unwrap();
+        assert_eq!(online, TrustRootSource::Tuf);
+        let (_, offline) = load_trusted_root_offline().await.unwrap();
+        assert_eq!(offline, TrustRootSource::Tuf);
+    }
+
+    /// A planted trusted_root.json in the TUF cache must be rejected, not served.
+    #[tokio::test]
+    #[ignore = "needs network"]
+    async fn a_tampered_tuf_cache_is_not_served_as_the_trust_root() {
+        let dir = std::env::temp_dir().join(format!("pc-tuf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("XDG_CACHE_HOME", &dir);
+        let (_, online) = load_trusted_root().await.unwrap();
+        assert_eq!(online, TrustRootSource::Tuf);
+        let mut planted = 0;
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(d).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().contains("trusted_root"))
+                {
+                    std::fs::write(&path, br#"{"mediaType":"application/vnd.dev.sigstore.trustedroot+json;version=0.1","tlogs":[],"certificateAuthorities":[],"ctlogs":[],"timestampAuthorities":[]}"#).unwrap();
+                    planted += 1;
+                }
+            }
+        }
+        assert!(planted > 0, "no cached trusted_root found to tamper with");
+        let (_, offline) = load_trusted_root_offline().await.unwrap();
+        assert_eq!(offline, TrustRootSource::Embedded);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn empty_answer_is_no_attestation() {
         let r = run(Mock::Empty, DIGEST, Some("cli/cli")).await;
         assert_eq!(r.status, Status::NoAttestation);
+    }
+
+    #[tokio::test]
+    async fn a_retry_is_noted_in_the_report() {
+        let r = run(Mock::Retried, DIGEST, Some("cli/cli")).await;
+        assert!(r.notes.iter().any(|n| n.contains("retried once")));
     }
 
     #[tokio::test]

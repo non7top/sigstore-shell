@@ -1,6 +1,6 @@
 # sigstore-shell
 
-A Windows Explorer extension that adds a **Sigstore** tab to a file's Properties dialog. The tab shows where an exe came from: GitHub repo, owner, workflow, commit and signing date. Promptloom is the first project to publish files that this extension can read.
+A Windows Explorer extension that adds a **Provenance** tab to a file's Properties dialog. The tab shows where an exe came from: GitHub repo, owner, workflow, commit and signing date. Promptloom is the first project to publish files that this extension can read.
 
 Status: early implementation. Items marked **unverified** come from documentation or memory and need a real check first.
 
@@ -54,7 +54,7 @@ The claim says which repo the publisher says published the file. This section is
 
 ## Tab behaviour
 
-- Tab label: "Sigstore".
+- Tab label: "Provenance".
 - **Verification is an explicit button, not automatic.** Hashing a large exe, the network call and the signature check can take significant time, and the click is also the consent to send the file's hash to GitHub. Opening the tab never does any of that.
 - Before the button is pressed: the embedded repo, if any, labelled "claimed, not verified", or "no provenance information in this file".
 - After: verified (repo/owner/workflow/commit/date), no attestation found, mismatch with the embedded claim, or lookup failed (offline, rate-limited). Run it off the UI thread with a progress indicator and a cancel, and cache the result per file hash.

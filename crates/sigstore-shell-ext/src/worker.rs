@@ -2,8 +2,9 @@ use crate::cache::Cache;
 use crate::job::{self, JobError, JobInput};
 use crate::model::{Event, Phase};
 use crate::page::Mailbox;
-use crate::settings::app_dir;
-use provenance_core::{load_trusted_root, GithubProvider, Provider, RekorProvider};
+use provenance_core::{
+    load_trusted_root, load_trusted_root_offline, GithubProvider, Provider, RekorProvider,
+};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -21,6 +22,8 @@ pub struct JobCtx {
     pub path: PathBuf,
     pub claimed_repo: Option<String>,
     pub rekor: bool,
+    /// Skip the cache and ask GitHub now.
+    pub refresh: bool,
     pub cancel: Arc<AtomicBool>,
     pub mailbox: Arc<Mailbox>,
 }
@@ -35,7 +38,7 @@ fn run_job(ctx: &JobCtx) {
         if ctx.rekor {
             providers.push(Box::new(RekorProvider::default()));
         }
-        let cache = app_dir().map(|d| Cache::new(d.join("cache")));
+        let cache = Cache::user();
         let last = AtomicU8::new(u8::MAX);
         let progress = |phase: Phase| {
             if let Phase::Hashing { percent } = phase {
@@ -51,13 +54,19 @@ fn run_job(ctx: &JobCtx) {
         let input = JobInput {
             path: &ctx.path,
             claimed_repo: ctx.claimed_repo.clone(),
-            rekor: ctx.rekor,
+            refresh: ctx.refresh,
         };
         runtime.block_on(job::run(
             &input,
             cache.as_ref(),
             &providers,
-            load_trusted_root,
+            |offline| async move {
+                if offline {
+                    load_trusted_root_offline().await
+                } else {
+                    load_trusted_root().await
+                }
+            },
             &ctx.cancel,
             &progress,
         ))

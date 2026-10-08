@@ -8,7 +8,7 @@ This project shows that record where you look at the file: the Properties dialog
 
 ## What it does
 
-- Adds a **Sigstore** tab to an exe's Properties in Explorer: repo, owner, workflow, commit and signing date, verified from the file's Sigstore attestation.
+- Adds a **Provenance** tab to an exe's Properties in Explorer: an outcome icon, repo, short commit, links to the commit, workflow and build run, and the signing details, verified from the file's Sigstore attestation.
 - Ships the same check as a command line (`sigstore-shell-cli verify <file>`, Windows and Linux).
 
 Nothing is hashed or sent anywhere until you press **Verify** or run the CLI. Either one sends the file's SHA-256 to GitHub.

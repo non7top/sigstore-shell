@@ -1,5 +1,5 @@
 //! Loads the built DLL the way Explorer would and walks the COM entry points.
-//! Usage: smoke <dll> <exe> [--ui]   (meant to run under Wine; exits non-zero on the first failure)
+//! Usage: smoke <dll> <exe> [--ui [--shot <file.bmp>]]   (meant to run under Wine; exits non-zero on the first failure)
 
 #[cfg(not(windows))]
 fn main() {
@@ -16,6 +16,10 @@ mod imp {
     use windows::Win32::Foundation::{
         CLASS_E_CLASSNOTAVAILABLE, E_NOTIMPL, HWND, LPARAM, S_FALSE, S_OK, WPARAM,
     };
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, GetDC, GetDIBits, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+    };
     use windows::Win32::System::Com::{
         IAdviseSink, IClassFactory, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA,
         FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
@@ -23,17 +27,17 @@ mod imp {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
     use windows::Win32::UI::Controls::{
-        DestroyPropertySheetPage, PropertySheetW, HPROPSHEETPAGE, PROPSHEETHEADERW_V2,
-        PROPSHEETHEADERW_V2_1, PROPSHEETHEADERW_V2_2, PROPSHEETHEADERW_V2_3, PSH_MODELESS,
-        PSM_GETCURRENTPAGEHWND,
+        DestroyPropertySheetPage, PropertySheetW, HPROPSHEETPAGE, NMHDR, NMLINK, NM_CLICK,
+        PROPSHEETHEADERW_V2, PROPSHEETHEADERW_V2_1, PROPSHEETHEADERW_V2_2, PROPSHEETHEADERW_V2_3,
+        PSH_MODELESS, PSM_GETCURRENTPAGEHWND,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
     /// PSH_USEHPSP from prsht.h; the windows crate omits it.
     const PSH_USEHPSP: u32 = 0x100;
     use windows::Win32::UI::Shell::{IShellExtInit, IShellPropSheetExt, DROPFILES};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetDlgItem, GetWindowTextW, PeekMessageW, SendMessageW, TranslateMessage,
-        BM_CLICK, MSG, PM_REMOVE,
+        DispatchMessageW, GetDlgItem, GetWindowRect, GetWindowTextW, PeekMessageW, SendMessageW,
+        TranslateMessage, BM_CLICK, MSG, PM_REMOVE, WM_NOTIFY,
     };
 
     const CLSID: GUID = GUID::from_u128(0xfbcd8210_9f9c_4b07_900a_ad12500a4363);
@@ -144,7 +148,57 @@ mod imp {
         }
     }
 
-    fn ui(page: HPROPSHEETPAGE) {
+    /// Copies the window's pixels off the (virtual) screen into a top-down 32-bit BMP.
+    fn screenshot(hwnd: HWND, file: &str) {
+        let mut r = windows::Win32::Foundation::RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut r) }.expect("GetWindowRect");
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        unsafe {
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, w, h);
+            SelectObject(dc, bmp.into());
+            BitBlt(dc, 0, 0, w, h, Some(screen), r.left, r.top, SRCCOPY).expect("BitBlt");
+            GetDIBits(
+                dc,
+                bmp,
+                0,
+                h as u32,
+                Some(px.as_mut_ptr().cast()),
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+        }
+        let mut out = Vec::new();
+        out.extend(b"BM");
+        out.extend((54 + px.len() as u32).to_le_bytes());
+        out.extend([0u8; 4]);
+        out.extend(54u32.to_le_bytes());
+        out.extend(40u32.to_le_bytes());
+        out.extend(w.to_le_bytes());
+        out.extend((-h).to_le_bytes());
+        out.extend(1u16.to_le_bytes());
+        out.extend(32u16.to_le_bytes());
+        out.extend([0u8; 24]);
+        out.extend(px);
+        std::fs::write(file, out).expect("write screenshot");
+        println!("screenshot written: {file}");
+    }
+
+    fn ui(page: HPROPSHEETPAGE, shot: Option<&str>) {
         let mut pages = [page];
         let caption: Vec<u16> = "smoke\0".encode_utf16().collect();
         let header = PROPSHEETHEADERW_V2 {
@@ -174,22 +228,30 @@ mod imp {
             .0 as *mut c_void,
         );
         step("page dialog exists", !page_hwnd.0.is_null());
-        println!("claim:    {}", text(page_hwnd, 101));
+        if let Some(f) = shot {
+            screenshot(sheet, &format!("{f}.before.bmp"));
+        }
+        println!("repo:     {}", text(page_hwnd, 101));
+        println!("note:     {}", text(page_hwnd, 110));
         println!("headline: {}", text(page_hwnd, 102));
         println!("consent:  {}", text(page_hwnd, 104));
+        println!("explain:  {}", text(page_hwnd, 111));
         let verify = unsafe { GetDlgItem(Some(page_hwnd), 107) }.unwrap();
         step(
             "Verify enabled for a file with a claim",
             unsafe { IsWindowEnabled(verify) }.as_bool(),
         );
-        unsafe {
-            SendMessageW(
-                page_hwnd,
-                windows::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                Some(WPARAM(107)),
-                Some(LPARAM(verify.0 as isize)),
-            )
-        };
+        let demo = std::env::var_os("SIGSTORE_SHELL_DEMO_REPORT").is_some();
+        if !demo {
+            unsafe {
+                SendMessageW(
+                    page_hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+                    Some(WPARAM(107)),
+                    Some(LPARAM(verify.0 as isize)),
+                )
+            };
+        }
         let _ = BM_CLICK;
         pump(300);
         println!("after click: {}", text(page_hwnd, 102));
@@ -201,8 +263,57 @@ mod imp {
             }
         }
         println!("final headline: {}", text(page_hwnd, 102));
+        println!(
+            "final repo: {} {}",
+            text(page_hwnd, 101),
+            text(page_hwnd, 110)
+        );
+        println!("rate line: {}", text(page_hwnd, 117));
+        println!("verify label: {}", text(page_hwnd, 107));
         println!("final details:\n{}", text(page_hwnd, 103));
+        pump(500);
+        if let Some(f) = shot {
+            screenshot(sheet, &format!("{f}.after.bmp"));
+        }
+        if demo {
+            click_clear_cache(page_hwnd);
+            if let Some(f) = shot {
+                screenshot(sheet, &format!("{f}.cleared.bmp"));
+            }
+        }
         let _ = DestroyPropertySheetPage;
+    }
+
+    /// The demo report is a cached result: clicking "Clear cache" must turn its line into the plain notice.
+    fn click_clear_cache(page: HWND) {
+        step(
+            "cached result shows its actions",
+            text(page, 121).contains("Check online") && text(page, 121).contains("Clear cache"),
+        );
+        let link = unsafe { GetDlgItem(Some(page), 121) }.unwrap();
+        let mut nm = NMLINK {
+            hdr: NMHDR {
+                hwndFrom: link,
+                idFrom: 121,
+                code: NM_CLICK,
+            },
+            ..Default::default()
+        };
+        nm.item.iLink = 1;
+        unsafe {
+            SendMessageW(
+                page,
+                WM_NOTIFY,
+                Some(WPARAM(121)),
+                Some(LPARAM(&nm as *const NMLINK as isize)),
+            )
+        };
+        pump(300);
+        println!("after Clear cache: {}", text(page, 117));
+        step(
+            "Clear cache leaves a plain notice",
+            text(page, 117).starts_with("Cached result cleared"),
+        );
     }
 
     pub fn main() {
@@ -254,7 +365,11 @@ mod imp {
 
         let page = PAGES.with(|p| p.borrow()[0]);
         if with_ui {
-            ui(page);
+            let shot = args
+                .iter()
+                .position(|a| a == "--shot")
+                .map(|i| args[i + 1].as_str());
+            ui(page, shot);
         } else {
             step(
                 "page destroyed",

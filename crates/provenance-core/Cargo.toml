@@ -14,6 +14,7 @@ async-trait = "0.1"
 hex = "0.4"
 jiff = "0.2"
 pelite = { version = "0.10", default-features = false, features = ["std", "mmap"] }
+tokio = { version = "1", features = ["time"] }
 reqwest = { version = "0.13", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
