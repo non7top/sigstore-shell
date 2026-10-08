@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/non7top/sigstore-shell/compare/v0.1.0...v0.2.0) (2026-10-08)
+
+
+### Features
+
+* **ext:** Attestation and Log entry links on a verified result ([6d5d6e6](https://github.com/non7top/sigstore-shell/commit/6d5d6e6509b1f223cce878be29b4c2d9e8882bb8))
+* **ext:** outcome glyph, top summary, links and copy buttons on the Sigstore tab ([cd6c277](https://github.com/non7top/sigstore-shell/commit/cd6c277819af7369c5e38e2bafc3dc0df781a273))
+* **ext:** outcome icons from SVG, links, copy buttons, layout ([14cfe18](https://github.com/non7top/sigstore-shell/commit/14cfe18f37f0c0d86993200d823cc64edf81a10c))
+* Provenance tab redesign and one retry on GitHub 5xx ([89dd4de](https://github.com/non7top/sigstore-shell/commit/89dd4dedd40edca84aece9f4bbda58f13bf69889))
+
+
+### Bug Fixes
+
+* **ext:** cache attestation bundles and re-verify them on every hit ([328aa0d](https://github.com/non7top/sigstore-shell/commit/328aa0d03543cf7f82494ce719a084afaa9c0553))
+* **ext:** cache attestation bundles and re-verify them on every hit ([dfb90e6](https://github.com/non7top/sigstore-shell/commit/dfb90e61bc19cb0a8168967d59a05bb765fcc75a))
+* **ext:** stack the tab layout from its content, repo and commit on one line ([24ebb93](https://github.com/non7top/sigstore-shell/commit/24ebb931a7799a27dced4a87e8887582bc700dec))
+
 ## 0.1.0 (2026-10-08)
 
 
