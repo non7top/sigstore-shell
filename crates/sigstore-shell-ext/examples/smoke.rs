@@ -27,9 +27,9 @@ mod imp {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
     use windows::Win32::UI::Controls::{
-        DestroyPropertySheetPage, PropertySheetW, HPROPSHEETPAGE, PROPSHEETHEADERW_V2,
-        PROPSHEETHEADERW_V2_1, PROPSHEETHEADERW_V2_2, PROPSHEETHEADERW_V2_3, PSH_MODELESS,
-        PSM_GETCURRENTPAGEHWND,
+        DestroyPropertySheetPage, PropertySheetW, HPROPSHEETPAGE, NMHDR, NMLINK, NM_CLICK,
+        PROPSHEETHEADERW_V2, PROPSHEETHEADERW_V2_1, PROPSHEETHEADERW_V2_2, PROPSHEETHEADERW_V2_3,
+        PSH_MODELESS, PSM_GETCURRENTPAGEHWND,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
     /// PSH_USEHPSP from prsht.h; the windows crate omits it.
@@ -37,7 +37,7 @@ mod imp {
     use windows::Win32::UI::Shell::{IShellExtInit, IShellPropSheetExt, DROPFILES};
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetDlgItem, GetWindowRect, GetWindowTextW, PeekMessageW, SendMessageW,
-        TranslateMessage, BM_CLICK, MSG, PM_REMOVE,
+        TranslateMessage, BM_CLICK, MSG, PM_REMOVE, WM_NOTIFY,
     };
 
     const CLSID: GUID = GUID::from_u128(0xfbcd8210_9f9c_4b07_900a_ad12500a4363);
@@ -275,7 +275,45 @@ mod imp {
         if let Some(f) = shot {
             screenshot(sheet, &format!("{f}.after.bmp"));
         }
+        if demo {
+            click_clear_cache(page_hwnd);
+            if let Some(f) = shot {
+                screenshot(sheet, &format!("{f}.cleared.bmp"));
+            }
+        }
         let _ = DestroyPropertySheetPage;
+    }
+
+    /// The demo report is a cached result: clicking "Clear cache" must turn its line into the plain notice.
+    fn click_clear_cache(page: HWND) {
+        step(
+            "cached result shows its actions",
+            text(page, 121).contains("Check online") && text(page, 121).contains("Clear cache"),
+        );
+        let link = unsafe { GetDlgItem(Some(page), 121) }.unwrap();
+        let mut nm = NMLINK {
+            hdr: NMHDR {
+                hwndFrom: link,
+                idFrom: 121,
+                code: NM_CLICK,
+            },
+            ..Default::default()
+        };
+        nm.item.iLink = 1;
+        unsafe {
+            SendMessageW(
+                page,
+                WM_NOTIFY,
+                Some(WPARAM(121)),
+                Some(LPARAM(&nm as *const NMLINK as isize)),
+            )
+        };
+        pump(300);
+        println!("after Clear cache: {}", text(page, 117));
+        step(
+            "Clear cache leaves a plain notice",
+            text(page, 117).starts_with("Cached result cleared"),
+        );
     }
 
     pub fn main() {

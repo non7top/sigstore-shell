@@ -59,6 +59,8 @@ pub enum Event {
         result: Result<Box<Report>, String>,
     },
     Cancel,
+    /// The cached entry behind the shown result was deleted.
+    CacheCleared,
 }
 
 impl State {
@@ -85,6 +87,11 @@ impl State {
                 }
             }
             (State::Running { .. }, Event::Cancel) => State::Cancelled,
+            (State::Done(mut report), Event::CacheCleared) if is_cached(&report) => {
+                report.notes.retain(|n| !n.starts_with(CACHED_NOTE));
+                report.notes.push(CLEARED_NOTE.into());
+                State::Done(report)
+            }
             (state, _) => state,
         }
     }
@@ -132,8 +139,10 @@ pub struct View {
     pub links: Vec<Link>,
     pub rows: Vec<(String, String)>,
     pub notes: Vec<String>,
-    /// Reset time of the GitHub window, or that the answer came from the cache.
+    /// Reset time of the GitHub window, or that the cache was just cleared.
     pub rate_line: Option<String>,
+    /// "Cached result from <local time>" when the result came from the cache; the page adds the actions.
+    pub cache_line: Option<String>,
     pub sha256: Option<String>,
     pub signer: Option<String>,
     pub consent: String,
@@ -165,10 +174,15 @@ impl Rate {
     }
 }
 
-const CACHED_NOTE: &str = "Result cached from a check on ";
+pub const CACHED_NOTE: &str = "Result cached from a check on ";
+const CLEARED_NOTE: &str = "Cached result cleared.";
 
 fn is_cached(report: &Report) -> bool {
     report.notes.iter().any(|n| n.starts_with(CACHED_NOTE))
+}
+
+fn is_cleared(report: &Report) -> bool {
+    report.notes.iter().any(|n| n == CLEARED_NOTE)
 }
 
 /// The cache note carries UTC (`2026-10-08 04:24:11 UTC.`); show it in local time.
@@ -186,7 +200,7 @@ fn cached_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
                 .to_string()
         })
         .unwrap_or_else(|| stamp.to_string());
-    Some(format!("Cached result from {when}; no GitHub request used"))
+    Some(format!("Cached result from {when}"))
 }
 
 /// Everything besides the file's own state that the view depends on.
@@ -286,7 +300,10 @@ pub fn verify_label(base: &str, rate: Option<Rate>) -> String {
 /// The count is per IP and shared with other tools, so it is never worded as this app's own quota.
 fn rate_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
     if is_cached(report) {
-        return cached_line(report, tz);
+        return None;
+    }
+    if is_cleared(report) {
+        return Some("Cached result cleared; the next Verify asks GitHub.".into());
     }
     if matches!(report.provider.as_deref(), Some(p) if p != "github") {
         return None;
@@ -535,6 +552,7 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
         rows: Vec::new(),
         notes: Vec::new(),
         rate_line: None,
+        cache_line: None,
         sha256: None,
         signer: None,
         consent: consent(rekor),
@@ -574,10 +592,11 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
             v.notes = report
                 .notes
                 .iter()
-                .filter(|n| !n.starts_with(CACHED_NOTE))
+                .filter(|n| !n.starts_with(CACHED_NOTE) && *n != CLEARED_NOTE)
                 .cloned()
                 .collect();
             v.rate_line = rate_line(report, &env.tz);
+            v.cache_line = cached_line(report, &env.tz);
             v.sha256 = Some(report.file_sha256.clone());
             v.signer = report.identity.as_ref().and_then(|i| i.san.clone());
             v.show_consent = false;
@@ -830,11 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn the_demo_report_fixture_shows_all_five_links() {
+    fn the_demo_report_fixture_shows_all_five_links_and_the_cache_line() {
         let r: Report =
             serde_json::from_str(include_str!("../tests/fixtures/demo-report.json")).unwrap();
         let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
         assert_eq!(v.links.len(), 5);
+        assert!(v.cache_line.is_some());
     }
 
     #[test]
@@ -1018,23 +1038,69 @@ mod tests {
     }
 
     #[test]
-    fn cached_result_says_no_request_was_used() {
+    fn cached_result_names_its_local_time_and_has_no_rate_line() {
         let mut r = limited(Some(52), Some(RESET));
         r.notes
             .push("Result cached from a check on 2026-10-08 04:24:11 UTC.".into());
+        assert_eq!(rate_line(&r, &jiff::tz::TimeZone::UTC), None);
+        let in_tz = |tz| {
+            let env = Env { rate: None, tz };
+            view_in(
+                &Claim::Absent,
+                &State::Done(Box::new(r.clone())),
+                true,
+                &env,
+            )
+        };
+        let v = in_tz(jiff::tz::TimeZone::UTC);
         assert_eq!(
-            rate_line(&r, &jiff::tz::TimeZone::UTC).unwrap(),
-            "Cached result from 2026-10-08 04:24; no GitHub request used"
+            v.cache_line.as_deref(),
+            Some("Cached result from 2026-10-08 04:24")
         );
-        let plus2 = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
-        assert!(rate_line(&r, &plus2).unwrap().contains("06:24"));
-        let v = view_in(
+        assert_eq!(v.rate_line, None);
+        assert!(v.notes.is_empty());
+        let plus2 = in_tz(jiff::tz::TimeZone::fixed(jiff::tz::offset(2)));
+        assert_eq!(
+            plus2.cache_line.as_deref(),
+            Some("Cached result from 2026-10-08 06:24")
+        );
+    }
+
+    #[test]
+    fn a_fresh_result_has_no_cache_line() {
+        let v = view(
             &Claim::Absent,
-            &State::Done(Box::new(r)),
+            &State::Done(Box::new(limited(Some(52), Some(RESET)))),
             true,
-            &Env::default(),
+        );
+        assert_eq!(v.cache_line, None);
+        assert!(v.rate_line.is_some());
+    }
+
+    #[test]
+    fn clearing_the_cache_replaces_the_cache_line_with_a_plain_notice() {
+        let mut r = verified();
+        r.notes
+            .push("Result cached from a check on 2026-10-08 04:24:11 UTC.".into());
+        let state = State::Done(Box::new(r)).apply(Event::CacheCleared);
+        let v = view(&Claim::Absent, &state, true);
+        assert_eq!(v.cache_line, None);
+        assert_eq!(
+            v.rate_line.as_deref(),
+            Some("Cached result cleared; the next Verify asks GitHub.")
         );
         assert!(v.notes.is_empty());
+        assert_eq!(v.outcome, Outcome::Good);
+        let again = state.apply(Event::CacheCleared);
+        assert_eq!(view(&Claim::Absent, &again, true).cache_line, None);
+    }
+
+    #[test]
+    fn clearing_does_nothing_to_a_result_that_was_not_cached() {
+        let state = State::Done(Box::new(verified())).apply(Event::CacheCleared);
+        let v = view(&Claim::Absent, &state, true);
+        assert_eq!(v.rate_line, None);
+        assert_eq!(v.cache_line, None);
     }
 
     #[test]

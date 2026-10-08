@@ -1,12 +1,15 @@
+use crate::cache::Cache;
 use crate::dlgtemplate::{
-    build, CONTENT_WIDTH, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT, ICON_VERIFIED,
-    ICON_WARNING, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN,
-    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_LINKS2, IDC_PROGRESS,
-    IDC_PROGRESS_TEXT, IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX, IDC_VERIFY, LINKS_RECT,
-    MARGIN, REPO_ROW, REPO_WIDTH, VERDICT_ROW,
+    build, CACHE_RECT, CONTENT_WIDTH, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT,
+    ICON_VERIFIED, ICON_WARNING, IDC_CACHE, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER,
+    IDC_DETAILS, IDC_EXPLAIN, IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_LINKS2,
+    IDC_PROGRESS, IDC_PROGRESS_TEXT, IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX,
+    IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW, REPO_WIDTH, VERDICT_ROW,
 };
 use crate::dll::{guard_value, module, Live};
-use crate::links::{markup, openable, split_rows, strip_markup, Link, FOOTER_MARKUP, FOOTER_URLS};
+use crate::links::{
+    cache_markup, markup, openable, split_rows, strip_markup, Link, FOOTER_MARKUP, FOOTER_URLS,
+};
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
@@ -598,7 +601,14 @@ impl Stack {
     }
 }
 
-unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool, link_rows: usize) {
+unsafe fn layout(
+    hwnd: HWND,
+    v: &View,
+    has_icon: bool,
+    details_shown: bool,
+    link_rows: usize,
+    cache_links: bool,
+) {
     let line = du(hwnd, MARGIN, REPO_ROW, REPO_WIDTH, 12);
     let left = du(hwnd, MARGIN, 0, 0, 0).left;
     let full_w = du(hwnd, 0, 0, CONTENT_WIDTH, 0).right;
@@ -650,7 +660,15 @@ unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool, link
         stack.put(hwnd, id, du(hwnd, 0, 0, 0, 10).bottom);
     }
     if details_shown {
-        let limit = du(hwnd, 0, 164, 0, 0).top - gap;
+        let rate_h = du(hwnd, 0, 0, 0, 9).bottom;
+        let cache_h = match &v.cache_line {
+            Some(line) if cache_links => {
+                wrapped_height(hwnd, IDC_CACHE, &strip_markup(&cache_markup(line)), full_w)
+                    .max(rate_h)
+            }
+            _ => rate_h,
+        };
+        let limit = du(hwnd, 0, 164, 0, 0).top - gap - (cache_h - rate_h);
         let lines = GetDlgItem(Some(hwnd), i32::from(IDC_DETAILS))
             .map_or(1, |e| SendMessageW(e, EM_GETLINECOUNT, None, None).0 as i32);
         let text_h = with_font_dc(hwnd, IDC_DETAILS, |dc| {
@@ -674,19 +692,13 @@ unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool, link
             buttons,
         );
         stack.y += buttons + gap;
-        place(
-            hwnd,
-            IDC_RATE,
-            left,
-            stack.y,
-            full_w,
-            du(hwnd, 0, 0, 0, 9).bottom,
-        );
+        place(hwnd, IDC_RATE, left, stack.y, full_w, rate_h);
+        place(hwnd, IDC_CACHE, left, stack.y, full_w, cache_h);
     }
 }
 
 /// Changes whenever the layout may have moved, so stale pixels get erased.
-fn shape_key(v: &View, has_icon: bool, link_rows: usize) -> u64 {
+fn shape_key(v: &View, has_icon: bool, link_rows: usize, cache_links: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (
@@ -696,7 +708,7 @@ fn shape_key(v: &View, has_icon: bool, link_rows: usize) -> u64 {
         &v.repo_note,
         &v.headline,
         v.links.len(),
-        link_rows,
+        (link_rows, cache_links),
         v.running,
         v.show_consent,
         v.rows.len(),
@@ -753,15 +765,31 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
     if let Ok(edit) = GetDlgItem(Some(hwnd), i32::from(IDC_DETAILS)) {
         SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(0)));
     }
-    set_text(hwnd, IDC_RATE, v.rate_line.as_deref().unwrap_or(""));
+    // Without the SysLink class the line is shown as plain text, without its actions.
+    let cache_links = v.cache_line.is_some() && data.has_link_class.get();
+    let rate_text = match (&v.rate_line, &v.cache_line) {
+        (Some(rate), _) => rate.as_str(),
+        (None, Some(cached)) if !cache_links => cached.as_str(),
+        _ => "",
+    };
+    set_text(hwnd, IDC_RATE, rate_text);
+    set_text(
+        hwnd,
+        IDC_CACHE,
+        &v.cache_line
+            .as_deref()
+            .map(cache_markup)
+            .unwrap_or_default(),
+    );
+    show(hwnd, IDC_CACHE, cache_links);
     show(hwnd, IDC_COPY_SHA, v.sha256.is_some());
     show(hwnd, IDC_COPY_SIGNER, v.signer.is_some());
     set_text(hwnd, IDC_CONSENT, &v.consent);
     show(hwnd, IDC_CONSENT, v.show_consent);
     set_text(hwnd, IDC_VERIFY, &v.verify_label);
     set_text(hwnd, IDC_PROGRESS_TEXT, &v.progress_text);
-    layout(hwnd, &v, has_icon, details, link_rows);
-    let shape = shape_key(&v, has_icon, link_rows);
+    layout(hwnd, &v, has_icon, details, link_rows, cache_links);
+    let shape = shape_key(&v, has_icon, link_rows, cache_links);
     if data.shape.replace(shape) != shape {
         let _ = RedrawWindow(
             Some(hwnd),
@@ -807,6 +835,8 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
     create_fonts(hwnd, data);
     create_text(hwnd, IDC_LINKS, LINKS_RECT, "", data);
     create_text(hwnd, IDC_LINKS2, LINKS_RECT, "", data);
+    create_text(hwnd, IDC_CACHE, CACHE_RECT, "", data);
+    set_font(hwnd, IDC_CACHE, data.fonts.get()[3]);
     create_text(hwnd, IDC_FOOTER, FOOTER_RECT, FOOTER_MARKUP, data);
     add_tooltip(hwnd);
     #[cfg(feature = "demo-report")]
@@ -892,6 +922,15 @@ unsafe fn on_link(hwnd: HWND, data: &PageData, nm: *const NMHDR) {
         return;
     }
     let index = usize::try_from((*nm.cast::<NMLINK>()).item.iLink).unwrap_or(usize::MAX);
+    if (*nm).idFrom == usize::from(IDC_CACHE) {
+        let shown = data.ui.borrow().view().cache_line.is_some();
+        match index {
+            0 if shown => on_verify(hwnd, data, true),
+            1 if shown => on_clear(hwnd, data),
+            _ => {}
+        }
+        return;
+    }
     let url = match (*nm).idFrom {
         id if id == usize::from(IDC_FOOTER) => FOOTER_URLS.get(index).map(|u| (*u).to_string()),
         id if id == usize::from(IDC_LINKS) || id == usize::from(IDC_LINKS2) => {
@@ -930,7 +969,8 @@ unsafe fn themed_static(ctl: HWND, hdc: HDC, color: Option<COLORREF>) -> isize {
     GetStockObject(NULL_BRUSH).0 as isize
 }
 
-unsafe fn on_verify(hwnd: HWND, data: &PageData) {
+/// `refresh` skips the cache so GitHub is asked now.
+unsafe fn on_verify(hwnd: HWND, data: &PageData, refresh: bool) {
     let ctx = {
         let mut ui = data.ui.borrow_mut();
         if ui.state.is_running() || (ui.claim.repo().is_none() && !ui.rekor) {
@@ -944,6 +984,7 @@ unsafe fn on_verify(hwnd: HWND, data: &PageData) {
             path: data.path.clone(),
             claimed_repo: ui.claim.repo().map(str::to_string),
             rekor: ui.rekor,
+            refresh,
             cancel: ui.cancel.clone(),
             mailbox: data.mailbox.clone(),
         }
@@ -954,6 +995,21 @@ unsafe fn on_verify(hwnd: HWND, data: &PageData) {
             job,
             result: Err(format!("could not start the verification thread: {e}")),
         });
+    }
+    render(hwnd, data);
+}
+
+/// Deletes this file's cached entry only; the result on screen stays, relabelled as no longer cached.
+unsafe fn on_clear(hwnd: HWND, data: &PageData) {
+    {
+        let mut ui = data.ui.borrow_mut();
+        let State::Done(report) = &ui.state else {
+            return;
+        };
+        let cleared = Cache::user().is_some_and(|c| c.remove(&report.file_sha256).is_ok());
+        if cleared {
+            ui.state = std::mem::replace(&mut ui.state, State::Idle).apply(Event::CacheCleared);
+        }
     }
     render(hwnd, data);
 }
@@ -998,7 +1054,7 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if let (Some(data), BN_CLICKED) = (data_of(hwnd), code) {
                     match id {
-                        IDC_VERIFY => on_verify(hwnd, data),
+                        IDC_VERIFY => on_verify(hwnd, data, false),
                         IDC_CANCEL => on_cancel(hwnd, data),
                         IDC_COPY_SHA | IDC_COPY_SIGNER => on_copy(hwnd, data, id),
                         _ => {}

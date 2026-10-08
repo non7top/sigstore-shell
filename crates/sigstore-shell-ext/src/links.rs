@@ -29,6 +29,16 @@ pub fn openable(url: &str) -> bool {
             .is_some_and(|n| digits(n) && n.parse::<u64>().is_ok_and(|n| n <= i64::MAX as u64))
 }
 
+pub const CACHE_ACTIONS: [&str; 2] = ["Check online", "Clear cache"];
+
+/// The muted cache line with its two actions, e.g. `Cached result from 2026-10-08 07:12 · <a>Check online</a> · <a>Clear cache</a>`.
+pub fn cache_markup(line: &str) -> String {
+    format!(
+        "{line} \u{b7} <a>{}</a> \u{b7} <a>{}</a>",
+        CACHE_ACTIONS[0], CACHE_ACTIONS[1]
+    )
+}
+
 /// SysLink markup for a row of links, separated by three spaces.
 pub fn markup(links: &[Link]) -> String {
     links
@@ -393,6 +403,17 @@ mod tests {
         ] {
             assert!(!openable(u), "{u}");
         }
+    }
+
+    #[test]
+    fn cache_line_has_one_link_per_action_in_order() {
+        let m = cache_markup("Cached result from 2026-10-08 07:12");
+        assert_eq!(m.matches("<a>").count(), CACHE_ACTIONS.len());
+        assert_eq!(
+            strip_markup(&m),
+            "Cached result from 2026-10-08 07:12 \u{b7} Check online \u{b7} Clear cache"
+        );
+        assert!(m.contains("<a>Check online</a>") && m.ends_with("<a>Clear cache</a>"));
     }
 
     #[test]

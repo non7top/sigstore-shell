@@ -3,7 +3,7 @@ use crate::github::valid_repo;
 use crate::identity::Identity;
 use crate::provider::{Provider, ProviderError, RateLimit};
 use serde::{Deserialize, Serialize};
-use sigstore_verify::trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_verify::trust_root::{TrustedRoot, TufConfig, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 use sigstore_verify::types::{Bundle, Sha256Hash};
 use sigstore_verify::{VerificationPolicy, Verifier};
 use std::path::Path;
@@ -60,6 +60,15 @@ pub struct Report {
 
 pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     match TrustedRoot::production().await {
+        Ok(root) => Ok((root, TrustRootSource::Tuf)),
+        Err(_) => load_embedded_root(),
+    }
+}
+
+/// For re-checking a stored bundle with no network: the TUF cache from an earlier online run, which
+/// sigstore-tuf re-verifies from the compiled-in TUF root on every load, else the embedded root.
+pub async fn load_trusted_root_offline() -> Result<(TrustedRoot, TrustRootSource), String> {
+    match TrustedRoot::from_tuf(TufConfig::production().offline()).await {
         Ok(root) => Ok((root, TrustRootSource::Tuf)),
         Err(_) => load_embedded_root(),
     }
@@ -154,6 +163,29 @@ pub async fn verify_digest(
     root: &TrustedRoot,
     root_source: TrustRootSource,
 ) -> Result<Report, String> {
+    verify_digest_keeping_bundle(
+        digest_hex,
+        claimed_repo,
+        notes,
+        options,
+        providers,
+        root,
+        root_source,
+    )
+    .await
+    .map(|(report, _)| report)
+}
+
+/// Like [`verify_digest`], also returning the bundle that verified (for `verified` and `mismatch`).
+pub async fn verify_digest_keeping_bundle(
+    digest_hex: &str,
+    claimed_repo: Option<String>,
+    notes: Vec<String>,
+    options: &Options,
+    providers: &[Box<dyn Provider>],
+    root: &TrustedRoot,
+    root_source: TrustRootSource,
+) -> Result<(Report, Option<Bundle>), String> {
     let digest = Sha256Hash::from_hex(digest_hex).map_err(|e| e.to_string())?;
     let queried_repo = options.repo.clone().or_else(|| claimed_repo.clone());
 
@@ -236,7 +268,7 @@ pub async fn verify_digest(
                             report.identity = Some(identity);
                             report.attestation_id = fetched.attestation_id(i);
                             report.log_index = log_index(bundle);
-                            return Ok(report);
+                            return Ok((report, Some(bundle.clone())));
                         }
                         Err(e) => {
                             invalid = true;
@@ -263,7 +295,7 @@ pub async fn verify_digest(
     } else {
         Status::NotChecked
     };
-    Ok(report)
+    Ok((report, None))
 }
 
 #[cfg(test)]
@@ -387,6 +419,95 @@ mod tests {
         let r = run(Mock::Bundle, &other, Some("cli/cli")).await;
         assert_eq!(r.status, Status::VerificationFailed);
         assert!(r.identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stored_bundle_verifies_like_a_fresh_one_with_no_other_provider() {
+        let (root, src) = load_embedded_root().unwrap();
+        let bundle = Bundle::from_json(BUNDLE).unwrap();
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(crate::StoredBundle::new(
+            "github",
+            bundle,
+            Some(5),
+        ))];
+        let (report, kept) = verify_digest_keeping_bundle(
+            DIGEST,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            src,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.status, Status::Verified);
+        assert_eq!(report.provider.as_deref(), Some("github"));
+        assert_eq!(report.attestation_id, Some(5));
+        assert!(kept.is_some());
+        let other = "00".repeat(32);
+        let (report, kept) = verify_digest_keeping_bundle(
+            &other,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            TrustRootSource::Embedded,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.status, Status::VerificationFailed);
+        assert!(kept.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_stored_provider_name_is_reported_as_cache() {
+        let bundle = Bundle::from_json(BUNDLE).unwrap();
+        let name = crate::StoredBundle::new("evil <b>", bundle, None);
+        assert_eq!(name.name(), "cache");
+    }
+
+    /// Needs the network once: an online load fills the TUF cache, the offline load must then
+    /// serve it through full re-verification. Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs network"]
+    async fn the_offline_root_comes_from_the_verified_tuf_cache_after_an_online_load() {
+        let (_, online) = load_trusted_root().await.unwrap();
+        assert_eq!(online, TrustRootSource::Tuf);
+        let (_, offline) = load_trusted_root_offline().await.unwrap();
+        assert_eq!(offline, TrustRootSource::Tuf);
+    }
+
+    /// A planted trusted_root.json in the TUF cache must be rejected, not served.
+    #[tokio::test]
+    #[ignore = "needs network"]
+    async fn a_tampered_tuf_cache_is_not_served_as_the_trust_root() {
+        let dir = std::env::temp_dir().join(format!("pc-tuf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("XDG_CACHE_HOME", &dir);
+        let (_, online) = load_trusted_root().await.unwrap();
+        assert_eq!(online, TrustRootSource::Tuf);
+        let mut planted = 0;
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(d).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().contains("trusted_root"))
+                {
+                    std::fs::write(&path, br#"{"mediaType":"application/vnd.dev.sigstore.trustedroot+json;version=0.1","tlogs":[],"certificateAuthorities":[],"ctlogs":[],"timestampAuthorities":[]}"#).unwrap();
+                    planted += 1;
+                }
+            }
+        }
+        assert!(planted > 0, "no cached trusted_root found to tamper with");
+        let (_, offline) = load_trusted_root_offline().await.unwrap();
+        assert_eq!(offline, TrustRootSource::Embedded);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

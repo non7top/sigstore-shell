@@ -1,4 +1,4 @@
 {"status":"verified","file_sha256":"fbe7507588e05076175ccc337a28d7f76a065efaab4a0043d8422daaa6df2f2c","claimed_repo":"non7top/sigstore-shell","queried_repo":"non7top/sigstore-shell","provider":"github",
 "identity":{"repo":"non7top/sigstore-shell","owner":"non7top","workflow":".github/workflows/release.yml","git_ref":"refs/heads/master","commit":"3f14da398ad6473140cfe52b6d9eeee0c35b0eaa","signed_at":"2026-10-07T19:11:15Z","trigger":null,"runner":null,"run_url":"https://github.com/non7top/sigstore-shell/actions/runs/12345/attempts/1","issuer":null,"san":"https://github.com/non7top/sigstore-shell/.github/workflows/release.yml@refs/heads/master"},
 "attestation_id":53806567,"log_index":3140935978,
-"rate_limit":{"limit":60,"remaining":51,"reset_epoch":1791438120,"resource":"core"},"trust_root":"tuf","notes":[]}
+"rate_limit":null,"trust_root":"tuf","notes":["Result cached from a check on 2026-10-07 19:20:41 UTC."]}

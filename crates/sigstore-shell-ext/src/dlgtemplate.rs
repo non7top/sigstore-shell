@@ -23,6 +23,8 @@ pub const IDC_SEPARATOR: u16 = 118;
 pub const IDC_REPO_SUFFIX: u16 = 119;
 /// Second row of links, for when the first is full.
 pub const IDC_LINKS2: u16 = 120;
+/// The cached-result line with its two actions, a SysLink created in code like the links.
+pub const IDC_CACHE: u16 = 121;
 
 pub const MARGIN: i16 = 7;
 pub const CONTENT_WIDTH: i16 = 238;
@@ -39,6 +41,7 @@ pub const ICON_NEUTRAL: u16 = 203;
 pub const ICON_WARNING: u16 = 204;
 
 pub const LINKS_RECT: (i16, i16, i16, i16) = (7, 66, 238, 10);
+pub const CACHE_RECT: (i16, i16, i16, i16) = (7, 181, 238, 9);
 pub const FOOTER_RECT: (i16, i16, i16, i16) = (7, 197, 238, 19);
 pub const HEADLINE_RECT: (i16, i16, i16, i16) = (MARGIN, VERDICT_ROW, CONTENT_WIDTH, 24);
 
@@ -261,10 +264,10 @@ mod tests {
     #[test]
     fn control_ids_are_unique() {
         let mut ids: Vec<u16> = items().iter().map(|i| i.id).collect();
-        ids.extend([IDC_LINKS, IDC_LINKS2, IDC_FOOTER]);
+        ids.extend([IDC_LINKS, IDC_LINKS2, IDC_CACHE, IDC_FOOTER]);
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), items().len() + 3);
+        assert_eq!(ids.len(), items().len() + 4);
     }
 
     #[test]
@@ -272,7 +275,7 @@ mod tests {
         for r in items()
             .iter()
             .map(|i| i.rect)
-            .chain([LINKS_RECT, FOOTER_RECT])
+            .chain([LINKS_RECT, CACHE_RECT, FOOTER_RECT])
         {
             assert!(
                 r.0 >= 0 && r.1 >= 0 && r.0 + r.2 <= 252 && r.1 + r.3 <= 218,
