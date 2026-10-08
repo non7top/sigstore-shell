@@ -13,7 +13,7 @@ Tell where an exe came from by looking only at the file, with a lookup keyed by 
 - **Cosign bundles next to the file.** A `.cosign.bundle` is a detached file. Explorer ignores it, and a downloaded exe does not come with it.
 - **Embedding the signature in the exe.** The signature covers the exe's hash, so adding bytes to the exe breaks it. `cosign verify-blob` can't handle a custom trailer format.
 - **Searching the public Sigstore log (Rekor) by hash.** Rekor v1 supports it (`/api/v1/index/retrieve`) and is in maintenance mode but stays the public default "for the foreseeable future". Rekor v2 removed search by hash, and the replacement is only a planned separate service. A design that depends on it will break as signers move to v2.
-- **Authenticode.** SmartScreen only trusts Authenticode. Sigstore's roots are not in the Windows trust store, and Fulcio certificates last about 20 minutes, so Sigstore can't replace Authenticode. They do different jobs: Authenticode makes Windows accept the file, Sigstore says which repo built it. (SignPath Foundation offers free Authenticode signing for open-source projects; that is separate work in each publishing project.)
+- **Authenticode.** SmartScreen only trusts Authenticode. Sigstore's roots are not in the Windows trust store, and Fulcio certificates last about 20 minutes, so Sigstore can't replace Authenticode. They do different jobs: Authenticode makes Windows accept the file, Sigstore says which repo published it. (SignPath Foundation offers free Authenticode signing for open-source projects; that is separate work in each publishing project.)
 
 ## Mechanism
 
@@ -39,11 +39,11 @@ Lookup is a swappable provider; the verifier that checks the certificate chain a
 The embedded repo string is a hint only. Anyone can write any repo into an exe. The extension must show the identity from the attestation's certificate, never from the embedded string, and must flag a mismatch between the two.
 
 - A false repo in the string finds no attestation, so the tab says "no provenance".
-- A malicious file that points at its own repo and is really attested there shows that repo truthfully. The user sees who built it and decides.
+- A malicious file that points at its own repo and is really attested there shows that repo truthfully. The user sees who published it and decides.
 
 ## Embedded claim
 
-The claim says which repo the publisher says built the file. This section is normative; the constants are in `crates/provenance-core/src/claim_format.rs`, which the build scripts share with the reader.
+The claim says which repo the publisher says published the file. This section is normative; the constants are in `crates/provenance-core/src/claim_format.rs`, which the build scripts share with the reader.
 
 - **Value:** `owner/repo`, matching `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` (exactly one `/`, both parts non-empty), UTF-8 without a terminating NUL. At most 256 bytes.
 - **Hint only:** the claim is never evidence. The identity always comes from the verified certificate; a claim that differs from it is a mismatch.
