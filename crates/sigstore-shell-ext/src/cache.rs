@@ -95,6 +95,8 @@ mod tests {
                 repo: Some("cli/cli".into()),
                 ..Identity::default()
             }),
+            attestation_id: None,
+            log_index: None,
             rate_limit: None,
             trust_root: TrustRootSource::Tuf,
             notes: vec!["n".into()],

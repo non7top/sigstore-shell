@@ -21,6 +21,8 @@ pub const IDC_ICON: u16 = 116;
 pub const IDC_RATE: u16 = 117;
 pub const IDC_SEPARATOR: u16 = 118;
 pub const IDC_REPO_SUFFIX: u16 = 119;
+/// Second row of links, for when the first is full.
+pub const IDC_LINKS2: u16 = 120;
 
 pub const MARGIN: i16 = 7;
 pub const CONTENT_WIDTH: i16 = 238;
@@ -259,10 +261,10 @@ mod tests {
     #[test]
     fn control_ids_are_unique() {
         let mut ids: Vec<u16> = items().iter().map(|i| i.id).collect();
-        ids.extend([IDC_LINKS, IDC_FOOTER]);
+        ids.extend([IDC_LINKS, IDC_LINKS2, IDC_FOOTER]);
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), items().len() + 2);
+        assert_eq!(ids.len(), items().len() + 3);
     }
 
     #[test]

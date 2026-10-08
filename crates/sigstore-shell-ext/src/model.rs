@@ -1,4 +1,6 @@
-use crate::links::{commit_url, run_url, short_commit, workflow_url, Link};
+use crate::links::{
+    attestation_url, commit_url, log_entry_url, run_url, short_commit, workflow_url, Link,
+};
 use provenance_core::{valid_repo, ClaimError, Identity, Report, Status};
 
 /// What the file says about itself. Never trusted.
@@ -264,15 +266,6 @@ impl View {
     pub fn has_details(&self) -> bool {
         !self.rows.is_empty() || !self.notes.is_empty()
     }
-
-    /// SysLink markup for the build links; empty when there are none.
-    pub fn links_markup(&self) -> String {
-        self.links
-            .iter()
-            .map(|l| format!("<a>{}</a>", l.label))
-            .collect::<Vec<_>>()
-            .join("   ")
-    }
 }
 
 const LOW_REMAINING: u64 = 10;
@@ -472,7 +465,7 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
             }
         }
         if report.status == Status::Verified {
-            links = build_links(id);
+            links = build_links(id, report);
         }
     }
     if let Some(p) = &report.provider {
@@ -488,22 +481,29 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
     }
 }
 
-fn build_links(id: &Identity) -> Vec<Link> {
-    let (Some(repo), Some(commit)) = (id.repo.as_deref(), id.commit.as_deref()) else {
-        return Vec::new();
-    };
-    let candidates = [
-        ("Commit", commit_url(repo, commit)),
-        (
-            "Workflow file",
+fn build_links(id: &Identity, report: &Report) -> Vec<Link> {
+    let repo = id.repo.as_deref();
+    let commit = id.commit.as_deref();
+    let (repo_commit, workflow, run) = match (repo, commit) {
+        (Some(repo), Some(commit)) => (
+            commit_url(repo, commit),
             id.workflow
                 .as_deref()
                 .and_then(|w| workflow_url(repo, commit, w)),
-        ),
-        (
-            "Build run",
             id.run_url.as_deref().and_then(|u| run_url(repo, u)),
         ),
+        _ => (None, None, None),
+    };
+    let candidates = [
+        ("Commit", repo_commit),
+        ("Workflow file", workflow),
+        ("Build run", run),
+        (
+            "Attestation",
+            repo.zip(report.attestation_id)
+                .and_then(|(repo, id)| attestation_url(repo, id)),
+        ),
+        ("Log entry", report.log_index.and_then(log_entry_url)),
     ];
     candidates
         .into_iter()
@@ -597,6 +597,7 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::links::{markup, openable};
     use provenance_core::{RateLimit, TrustRootSource};
 
     fn report(status: Status) -> Report {
@@ -607,6 +608,8 @@ mod tests {
             queried_repo: Some("cli/cli".into()),
             provider: Some("github".into()),
             identity: None,
+            attestation_id: None,
+            log_index: None,
             rate_limit: None,
             trust_root: TrustRootSource::Tuf,
             notes: vec![],
@@ -791,9 +794,90 @@ mod tests {
             ]
         );
         assert_eq!(
-            v.links_markup(),
+            markup(&v.links),
             "<a>Commit</a>   <a>Workflow file</a>   <a>Build run</a>"
         );
+    }
+
+    #[test]
+    fn attestation_and_log_entry_links_follow_the_build_links() {
+        let r = Report {
+            attestation_id: Some(53_806_567),
+            log_index: Some(3_140_935_978),
+            ..verified()
+        };
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        let labels: Vec<_> = v.links.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Commit",
+                "Workflow file",
+                "Build run",
+                "Attestation",
+                "Log entry"
+            ]
+        );
+        assert_eq!(
+            v.links[3].url,
+            "https://github.com/cli/cli/attestations/53806567"
+        );
+        assert_eq!(
+            v.links[4].url,
+            "https://search.sigstore.dev/?logIndex=3140935978"
+        );
+        assert!(v.links.iter().all(|l| openable(&l.url)));
+    }
+
+    #[test]
+    fn the_demo_report_fixture_shows_all_five_links() {
+        let r: Report =
+            serde_json::from_str(include_str!("../tests/fixtures/demo-report.json")).unwrap();
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        assert_eq!(v.links.len(), 5);
+    }
+
+    #[test]
+    fn the_new_links_appear_only_when_their_data_exists() {
+        let only = |attestation_id, log_index| {
+            let r = Report {
+                attestation_id,
+                log_index,
+                ..verified()
+            };
+            let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+            v.links.len()
+        };
+        assert_eq!(only(None, None), 3);
+        assert_eq!(only(Some(7), None), 4);
+        assert_eq!(only(None, Some(9)), 4);
+        assert_eq!(only(Some(0), Some(0)), 3);
+        assert_eq!(only(Some(1), Some(u64::MAX)), 4);
+    }
+
+    #[test]
+    fn a_hostile_certificate_repo_gets_no_attestation_link() {
+        let mut r = Report {
+            attestation_id: Some(1),
+            log_index: Some(1),
+            ..verified()
+        };
+        r.identity.as_mut().unwrap().repo = Some("cli/cli/../../evil".into());
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        let labels: Vec<_> = v.links.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(labels, ["Log entry"]);
+    }
+
+    #[test]
+    fn a_mismatch_shows_no_links_even_with_ids() {
+        let r = Report {
+            status: Status::Mismatch,
+            attestation_id: Some(1),
+            log_index: Some(1),
+            ..verified()
+        };
+        let v = view(&Claim::Repo("x/y".into()), &State::Done(Box::new(r)), false);
+        assert!(v.links.is_empty());
     }
 
     #[test]

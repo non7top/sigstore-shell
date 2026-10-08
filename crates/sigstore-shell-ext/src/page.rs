@@ -1,12 +1,12 @@
 use crate::dlgtemplate::{
     build, CONTENT_WIDTH, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT, ICON_VERIFIED,
     ICON_WARNING, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN,
-    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT,
-    IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX, IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW,
-    REPO_WIDTH, VERDICT_ROW,
+    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_LINKS2, IDC_PROGRESS,
+    IDC_PROGRESS_TEXT, IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX, IDC_VERIFY, LINKS_RECT,
+    MARGIN, REPO_ROW, REPO_WIDTH, VERDICT_ROW,
 };
 use crate::dll::{guard_value, module, Live};
-use crate::links::{openable, strip_markup, FOOTER_MARKUP, FOOTER_URLS};
+use crate::links::{markup, openable, split_rows, strip_markup, Link, FOOTER_MARKUP, FOOTER_URLS};
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
@@ -129,6 +129,8 @@ struct PageData {
     /// Symbol, monospace, bold and small fonts, created on init and freed on destroy.
     fonts: Cell<[isize; 4]>,
     has_link_class: Cell<bool>,
+    /// How many links sit in the first row; the rest are in the second.
+    link_split: Cell<usize>,
     icon: Cell<isize>,
     icon_px: Cell<i32>,
     _live: Live,
@@ -156,6 +158,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
         shape: Cell::new(0),
         fonts: Cell::new([0; 4]),
         has_link_class: Cell::new(false),
+        link_split: Cell::new(0),
         icon: Cell::new(0),
         icon_px: Cell::new(20),
         _live: Live::new(),
@@ -595,7 +598,7 @@ impl Stack {
     }
 }
 
-unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool) {
+unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool, link_rows: usize) {
     let line = du(hwnd, MARGIN, REPO_ROW, REPO_WIDTH, 12);
     let left = du(hwnd, MARGIN, 0, 0, 0).left;
     let full_w = du(hwnd, 0, 0, CONTENT_WIDTH, 0).right;
@@ -643,8 +646,8 @@ unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool) {
         stack.put(hwnd, IDC_PROGRESS, du(hwnd, 0, 0, 0, 8).bottom);
         stack.put(hwnd, IDC_PROGRESS_TEXT, du(hwnd, 0, 0, 0, 10).bottom);
     }
-    if !v.links.is_empty() {
-        stack.put(hwnd, IDC_LINKS, du(hwnd, 0, 0, 0, 10).bottom);
+    for id in [IDC_LINKS, IDC_LINKS2].into_iter().take(link_rows) {
+        stack.put(hwnd, id, du(hwnd, 0, 0, 0, 10).bottom);
     }
     if details_shown {
         let limit = du(hwnd, 0, 164, 0, 0).top - gap;
@@ -683,7 +686,7 @@ unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool) {
 }
 
 /// Changes whenever the layout may have moved, so stale pixels get erased.
-fn shape_key(v: &View, has_icon: bool) -> u64 {
+fn shape_key(v: &View, has_icon: bool, link_rows: usize) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (
@@ -693,6 +696,7 @@ fn shape_key(v: &View, has_icon: bool) -> u64 {
         &v.repo_note,
         &v.headline,
         v.links.len(),
+        link_rows,
         v.running,
         v.show_consent,
         v.rows.len(),
@@ -701,6 +705,32 @@ fn shape_key(v: &View, has_icon: bool) -> u64 {
     )
         .hash(&mut h);
     h.finish()
+}
+
+/// Fills the link rows from the measured label widths, so a row never runs past the page edge
+/// at any DPI or font; returns the number of rows used.
+unsafe fn place_link_rows(hwnd: HWND, data: &PageData, links: &[Link]) -> usize {
+    let rows = if data.has_link_class.get() && !links.is_empty() {
+        let widths: Vec<i32> = links
+            .iter()
+            .map(|l| text_width(hwnd, IDC_LINKS, &l.label))
+            .collect();
+        let gap = text_width(hwnd, IDC_LINKS, "   ");
+        let room = du(hwnd, 0, 0, CONTENT_WIDTH, 0).right - du(hwnd, 0, 0, 0, 3).bottom;
+        split_rows(&widths, gap, room, 2)
+    } else {
+        Vec::new()
+    };
+    data.link_split.set(rows.first().map_or(0, |r| r.end));
+    for (i, id) in [IDC_LINKS, IDC_LINKS2].into_iter().enumerate() {
+        let text = rows
+            .get(i)
+            .map(|r| markup(&links[r.clone()]))
+            .unwrap_or_default();
+        set_text(hwnd, id, &text);
+        show(hwnd, id, !text.is_empty());
+    }
+    rows.len()
 }
 
 unsafe fn render(hwnd: HWND, data: &PageData) {
@@ -716,13 +746,7 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
         show_outcome(hwnd, data, v.outcome);
     }
     set_text(hwnd, IDC_HEADLINE, &v.headline);
-    let markup = v.links_markup();
-    set_text(hwnd, IDC_LINKS, &markup);
-    show(
-        hwnd,
-        IDC_LINKS,
-        !markup.is_empty() && data.has_link_class.get(),
-    );
+    let link_rows = place_link_rows(hwnd, data, &v.links);
     let details = v.has_details();
     show(hwnd, IDC_DETAILS, details);
     set_text(hwnd, IDC_DETAILS, &v.details_text());
@@ -736,8 +760,8 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
     show(hwnd, IDC_CONSENT, v.show_consent);
     set_text(hwnd, IDC_VERIFY, &v.verify_label);
     set_text(hwnd, IDC_PROGRESS_TEXT, &v.progress_text);
-    layout(hwnd, &v, has_icon, details);
-    let shape = shape_key(&v, has_icon);
+    layout(hwnd, &v, has_icon, details, link_rows);
+    let shape = shape_key(&v, has_icon, link_rows);
     if data.shape.replace(shape) != shape {
         let _ = RedrawWindow(
             Some(hwnd),
@@ -782,6 +806,7 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
     }
     create_fonts(hwnd, data);
     create_text(hwnd, IDC_LINKS, LINKS_RECT, "", data);
+    create_text(hwnd, IDC_LINKS2, LINKS_RECT, "", data);
     create_text(hwnd, IDC_FOOTER, FOOTER_RECT, FOOTER_MARKUP, data);
     add_tooltip(hwnd);
     #[cfg(feature = "demo-report")]
@@ -869,13 +894,15 @@ unsafe fn on_link(hwnd: HWND, data: &PageData, nm: *const NMHDR) {
     let index = usize::try_from((*nm.cast::<NMLINK>()).item.iLink).unwrap_or(usize::MAX);
     let url = match (*nm).idFrom {
         id if id == usize::from(IDC_FOOTER) => FOOTER_URLS.get(index).map(|u| (*u).to_string()),
-        id if id == usize::from(IDC_LINKS) => data
-            .ui
-            .borrow()
-            .view()
-            .links
-            .get(index)
-            .map(|l| l.url.clone()),
+        id if id == usize::from(IDC_LINKS) || id == usize::from(IDC_LINKS2) => {
+            let first = if id == usize::from(IDC_LINKS) {
+                0
+            } else {
+                data.link_split.get()
+            };
+            let v = data.ui.borrow().view();
+            v.links.get(first + index).map(|l| l.url.clone())
+        }
         _ => None,
     };
     if let Some(url) = url {

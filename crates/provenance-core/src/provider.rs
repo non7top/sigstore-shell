@@ -13,10 +13,18 @@ pub struct RateLimit {
 #[derive(Debug, Default)]
 pub struct Fetched {
     pub bundles: Vec<Bundle>,
+    /// Provider-side page id per bundle, same order; shorter than `bundles` means unknown. A link hint only.
+    pub attestation_ids: Vec<Option<u64>>,
     pub rate_limit: Option<RateLimit>,
     pub skipped: usize,
     /// The provider hit a server error and asked again once.
     pub retried: bool,
+}
+
+impl Fetched {
+    pub fn attestation_id(&self, bundle_index: usize) -> Option<u64> {
+        self.attestation_ids.get(bundle_index).copied().flatten()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

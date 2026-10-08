@@ -2,6 +2,7 @@
 
 pub const SIGSTORE_URL: &str = "https://www.sigstore.dev/";
 pub const PROJECT_URL: &str = "https://github.com/non7top/sigstore-shell";
+const LOG_SEARCH_PREFIX: &str = "https://search.sigstore.dev/?logIndex=";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
@@ -21,7 +22,53 @@ pub const FOOTER_URLS: [&str; 2] = [SIGSTORE_URL, PROJECT_URL];
 
 /// The only URLs the page may open.
 pub fn openable(url: &str) -> bool {
-    url == SIGSTORE_URL || url.starts_with("https://github.com/")
+    url == SIGSTORE_URL
+        || url.starts_with("https://github.com/")
+        || url
+            .strip_prefix(LOG_SEARCH_PREFIX)
+            .is_some_and(|n| digits(n) && n.parse::<u64>().is_ok_and(|n| n <= i64::MAX as u64))
+}
+
+/// SysLink markup for a row of links, separated by three spaces.
+pub fn markup(links: &[Link]) -> String {
+    links
+        .iter()
+        .map(|l| format!("<a>{}</a>", l.label))
+        .collect::<Vec<_>>()
+        .join("   ")
+}
+
+/// Splits labels, given their pixel widths, into consecutive rows that each fit in `max`.
+/// A label wider than `max` gets a row of its own. Beyond `max_rows` the last row takes the rest.
+pub fn split_rows(
+    widths: &[i32],
+    gap: i32,
+    max: i32,
+    max_rows: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut rows = Vec::new();
+    let (mut start, mut used) = (0, 0);
+    for (i, w) in widths.iter().enumerate() {
+        let needed = if i == start { *w } else { used + gap + *w };
+        if i > start && needed > max {
+            rows.push(start..i);
+            start = i;
+            used = *w;
+        } else {
+            used = needed;
+        }
+    }
+    if start < widths.len() {
+        rows.push(start..widths.len());
+    }
+    if rows.len() > max_rows {
+        let end = widths.len();
+        rows.truncate(max_rows);
+        if let Some(last) = rows.last_mut() {
+            last.end = end;
+        }
+    }
+    rows
 }
 
 fn name_ok(s: &str) -> bool {
@@ -42,6 +89,16 @@ fn commit_ok(sha: &str) -> bool {
 
 fn digits(s: &str) -> bool {
     !s.is_empty() && s.len() <= 20 && s.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `id` is GitHub's page id for the attestation, which is not part of its API response.
+pub fn attestation_url(repo: &str, id: u64) -> Option<String> {
+    (repo_ok(repo) && id > 0).then(|| format!("https://github.com/{repo}/attestations/{id}"))
+}
+
+/// Opens the entry in Rekor's public search; built from the integer alone.
+pub fn log_entry_url(index: u64) -> Option<String> {
+    (0 < index && index <= i64::MAX as u64).then(|| format!("{LOG_SEARCH_PREFIX}{index}"))
 }
 
 /// First 8 characters of a hex commit id, or None if it is not one.
@@ -148,6 +205,86 @@ mod tests {
     }
 
     #[test]
+    fn attestation_and_log_urls_are_built_from_integers() {
+        assert_eq!(
+            attestation_url("non7top/sigstore-shell", 53_806_567).unwrap(),
+            "https://github.com/non7top/sigstore-shell/attestations/53806567"
+        );
+        assert_eq!(
+            log_entry_url(3_140_935_978).unwrap(),
+            "https://search.sigstore.dev/?logIndex=3140935978"
+        );
+        assert!(openable(&log_entry_url(3_140_935_978).unwrap()));
+        assert!(openable(&attestation_url("a/b", 1).unwrap()));
+        assert_eq!(attestation_url("a/b", 0), None);
+        assert_eq!(log_entry_url(0), None);
+        assert!(log_entry_url(i64::MAX as u64).is_some());
+        assert_eq!(log_entry_url(i64::MAX as u64 + 1), None);
+        assert_eq!(log_entry_url(u64::MAX), None);
+    }
+
+    #[test]
+    fn hostile_repos_make_no_attestation_url() {
+        for repo in [
+            "",
+            "cli",
+            "../cli",
+            "a/b/c",
+            "a/b?x=1",
+            "a/b#f",
+            "a b/c",
+            "u@evil.com/x",
+            "evil.com:80/x",
+            "a/b%2e",
+            "a/b\n",
+            "https://evil.com/x",
+        ] {
+            assert_eq!(attestation_url(repo, 1), None, "{repo:?}");
+        }
+    }
+
+    #[test]
+    fn split_rows_fills_rows_in_order_without_exceeding_the_width() {
+        // 100% and 150%: same labels at 6 and 9 px per character, widths measured per label.
+        let labels = [
+            "Commit",
+            "Workflow file",
+            "Build run",
+            "Attestation",
+            "Log entry",
+        ];
+        for (px, gap, max) in [(6, 18, 357), (9, 27, 536)] {
+            let widths: Vec<i32> = labels.iter().map(|l| l.len() as i32 * px).collect();
+            let rows = split_rows(&widths, gap, max, 2);
+            assert_eq!(rows.iter().map(|r| r.len()).sum::<usize>(), 5);
+            assert_eq!(rows[0].start, 0);
+            for pair in rows.windows(2) {
+                assert_eq!(pair[0].end, pair[1].start);
+            }
+            for r in &rows {
+                let total: i32 = widths[r.clone()].iter().sum::<i32>() + gap * (r.len() as i32 - 1);
+                assert!(total <= max, "{px}px row {r:?} is {total} > {max}");
+            }
+        }
+        let wide = [100, 100, 100, 100, 100];
+        assert_eq!(split_rows(&wide, 10, 450, 2), [0..4, 4..5]);
+        assert_eq!(split_rows(&wide, 10, 1000, 2).len(), 1);
+        assert_eq!(split_rows(&wide, 10, 50, 9), [0..1, 1..2, 2..3, 3..4, 4..5]);
+        assert_eq!(split_rows(&wide, 10, 50, 2), [0..1, 1..5]);
+        assert_eq!(
+            split_rows(&[], 10, 100, 2),
+            Vec::<std::ops::Range<usize>>::new()
+        );
+    }
+
+    #[test]
+    fn five_links_wrap_onto_a_second_row_when_the_labels_are_wide() {
+        let widths = [60, 110, 80, 95, 75];
+        let rows = split_rows(&widths, 20, 357, 2);
+        assert_eq!(rows, [0..3, 3..5]);
+    }
+
+    #[test]
     fn hostile_commits_make_no_url() {
         for sha in [
             "",
@@ -242,6 +379,16 @@ mod tests {
             "file:///c:/x.exe",
             "https://github.com.evil.com/",
             "https://www.sigstore.dev.evil.com/",
+            "https://search.sigstore.dev/",
+            "https://search.sigstore.dev/?logIndex=",
+            "https://search.sigstore.dev/?logIndex=abc",
+            "https://search.sigstore.dev/?logIndex=-1",
+            "https://search.sigstore.dev/?logIndex=1&x=2",
+            "https://search.sigstore.dev/?logIndex=1#x",
+            "https://search.sigstore.dev/?logIndex=99999999999999999999",
+            "https://search.sigstore.dev/other?logIndex=1",
+            "http://search.sigstore.dev/?logIndex=1",
+            "https://search.sigstore.dev.evil.com/?logIndex=1",
             "",
         ] {
             assert!(!openable(u), "{u}");

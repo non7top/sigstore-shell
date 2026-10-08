@@ -4,7 +4,7 @@ export DOCKER_GID := $(shell id -g)
 CARGO := docker compose run --rm dev cargo
 WIN := x86_64-pc-windows-gnu
 
-.PHONY: build cli-win package installer dll fixture wine-smoke wine-ui test lint fmt shell
+.PHONY: build cli-win package installer dll fixture wine-smoke wine-ui wine-demo test lint fmt shell
 
 build:
 	mkdir -p dist
@@ -43,6 +43,12 @@ wine-smoke: dll fixture
 wine-ui: dll fixture
 	$(CARGO) build --release --locked --target $(WIN) -p sigstore-shell-ext --examples
 	docker compose run --rm wine ./scripts/wine-smoke.sh --ui
+
+# Screenshots the tab for the report in crates/sigstore-shell-ext/tests/fixtures/demo-report.json (no network): dist/tab.after.bmp.
+wine-demo: fixture
+	$(CARGO) build --release --locked --target $(WIN) -p sigstore-shell-ext --features demo-report
+	$(CARGO) build --release --locked --target $(WIN) -p sigstore-shell-ext --examples
+	docker compose run --rm -e SIGSTORE_SHELL_DEMO_REPORT='Z:\app\crates\sigstore-shell-ext\tests\fixtures\demo-report.json' wine ./scripts/wine-smoke.sh --ui
 
 test:
 	$(CARGO) test --locked --workspace

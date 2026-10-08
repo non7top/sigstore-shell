@@ -47,6 +47,12 @@ pub struct Report {
     pub provider: Option<String>,
     /// Present for `verified` and `mismatch`, from the certificate only.
     pub identity: Option<Identity>,
+    /// GitHub's page id for the attestation, from where the bundle was downloaded; a link hint, not verified.
+    #[serde(default)]
+    pub attestation_id: Option<u64>,
+    /// Rekor log index of the verified bundle's first transparency-log entry, if it has one.
+    #[serde(default)]
+    pub log_index: Option<u64>,
     pub rate_limit: Option<RateLimit>,
     pub trust_root: TrustRootSource,
     pub notes: Vec<String>,
@@ -63,6 +69,16 @@ pub fn load_embedded_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
         .map(|root| (root, TrustRootSource::Embedded))
         .map_err(|e| format!("no usable Sigstore trust root: {e}"))
+}
+
+/// Index 0 is what an omitted index parses as, and is Rekor's first entry, never ours.
+fn log_index(bundle: &Bundle) -> Option<u64> {
+    bundle
+        .verification_material
+        .tlog_entries
+        .first()
+        .map(|e| e.log_index.get())
+        .filter(|i| *i > 0)
 }
 
 fn same_repo(a: &str, b: &str) -> bool {
@@ -148,6 +164,8 @@ pub async fn verify_digest(
         queried_repo: queried_repo.clone(),
         provider: None,
         identity: None,
+        attestation_id: None,
+        log_index: None,
         rate_limit: None,
         trust_root: root_source,
         notes,
@@ -172,7 +190,7 @@ pub async fn verify_digest(
             }
             Ok(fetched) => {
                 if fetched.rate_limit.is_some() {
-                    report.rate_limit = fetched.rate_limit;
+                    report.rate_limit = fetched.rate_limit.clone();
                 }
                 if fetched.retried {
                     report.notes.push(format!(
@@ -192,7 +210,7 @@ pub async fn verify_digest(
                     continue;
                 }
                 let mut rejected = Vec::new();
-                for bundle in &fetched.bundles {
+                for (i, bundle) in fetched.bundles.iter().enumerate() {
                     match verify_bundle(&verifier, digest, bundle) {
                         Ok(identity) => {
                             if !rejected.is_empty() {
@@ -216,6 +234,8 @@ pub async fn verify_digest(
                                 Status::Verified
                             };
                             report.identity = Some(identity);
+                            report.attestation_id = fetched.attestation_id(i);
+                            report.log_index = log_index(bundle);
                             return Ok(report);
                         }
                         Err(e) => {
@@ -257,6 +277,7 @@ mod tests {
 
     enum Mock {
         Bundle,
+        BundleWithPageId(u64),
         Empty,
         Retried,
         Fail,
@@ -271,6 +292,11 @@ mod tests {
             match self {
                 Mock::Bundle => Ok(Fetched {
                     bundles: vec![Bundle::from_json(BUNDLE).unwrap()],
+                    ..Fetched::default()
+                }),
+                Mock::BundleWithPageId(id) => Ok(Fetched {
+                    bundles: vec![Bundle::from_json(BUNDLE).unwrap()],
+                    attestation_ids: vec![Some(*id)],
                     ..Fetched::default()
                 }),
                 Mock::Empty => Ok(Fetched::default()),
@@ -318,6 +344,34 @@ mod tests {
             Some("fc4b137cdef0a6bd28fd461b7cf9c84a5812a8cd")
         );
         assert!(id.signed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn report_carries_the_log_index_and_the_page_id_of_the_verified_bundle() {
+        let r = run(Mock::BundleWithPageId(53_806_567), DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::Verified);
+        assert_eq!(r.attestation_id, Some(53_806_567));
+        assert_eq!(r.log_index, Some(3_010_358_693));
+        let plain = run(Mock::Bundle, DIGEST, Some("cli/cli")).await;
+        assert_eq!(plain.attestation_id, None);
+    }
+
+    #[test]
+    fn no_tlog_entry_or_index_zero_gives_no_log_index() {
+        let mut bundle = Bundle::from_json(BUNDLE).unwrap();
+        assert_eq!(log_index(&bundle), Some(3_010_358_693));
+        bundle.verification_material.tlog_entries[0].log_index = Default::default();
+        assert_eq!(log_index(&bundle), None);
+        bundle.verification_material.tlog_entries.clear();
+        assert_eq!(log_index(&bundle), None);
+    }
+
+    #[test]
+    fn reports_from_before_the_new_fields_still_parse() {
+        let old = r#"{"status":"verified","file_sha256":"ab","claimed_repo":null,"queried_repo":null,
+            "provider":null,"identity":null,"rate_limit":null,"trust_root":"tuf","notes":[]}"#;
+        let r: Report = serde_json::from_str(old).unwrap();
+        assert_eq!((r.attestation_id, r.log_index), (None, None));
     }
 
     #[tokio::test]

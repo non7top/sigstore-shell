@@ -34,6 +34,24 @@ pub fn valid_repo(repo: &str) -> bool {
     matches!((parts.next(), parts.next(), parts.next()), (Some(o), Some(r), None) if ok(o) && ok(r))
 }
 
+/// The id in `github.com/<repo>/attestations/<id>`, taken from the last path segment of the blob
+/// URL (`.../2026/10/08/53806567.json.sn?sig=...`). The API response has no field for it, so any
+/// other layout yields None and the link is simply not shown. The URL is never fetched here.
+pub fn attestation_id(bundle_url: &str) -> Option<u64> {
+    let rest = bundle_url.strip_prefix("https://")?;
+    let before_query = rest.split(['?', '#']).next()?;
+    let (_host, path) = before_query.split_once('/')?;
+    let segment = path.rsplit('/').next()?;
+    let stem = segment
+        .strip_suffix(".json.sn")
+        .or_else(|| segment.strip_suffix(".json"))?;
+    let digits = !stem.is_empty() && stem.len() <= 18 && stem.bytes().all(|b| b.is_ascii_digit());
+    digits
+        .then(|| stem.parse().ok())
+        .flatten()
+        .filter(|id| *id > 0)
+}
+
 impl GithubProvider {
     pub fn new(token: Option<String>) -> Self {
         Self::with_base(token, API)
@@ -184,13 +202,17 @@ impl Provider for GithubProvider {
             ..Fetched::default()
         };
         for attestation in parsed.attestations {
+            let page_id = attestation.bundle_url.as_deref().and_then(attestation_id);
             let parsed = match (attestation.bundle, attestation.bundle_url) {
                 (Some(inline), _) => Bundle::from_json(&inline.to_string()).ok(),
                 (None, Some(url)) => self.download_bundle(&url).await,
                 (None, None) => None,
             };
             match parsed {
-                Some(bundle) => fetched.bundles.push(bundle),
+                Some(bundle) => {
+                    fetched.bundles.push(bundle);
+                    fetched.attestation_ids.push(page_id);
+                }
                 None => fetched.skipped += 1,
             }
         }
@@ -201,6 +223,43 @@ impl Provider for GithubProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attestation_id_comes_from_the_path_only() {
+        let url = "https://tmaproduction.blob.core.windows.net/attestations/1408617312/2026/10/08/53806567.json.sn?se=2026-10-08T08%3A04%3A57Z&sig=abc";
+        assert_eq!(attestation_id(url), Some(53_806_567));
+        assert_eq!(attestation_id("https://h/a/7.json"), Some(7));
+    }
+
+    #[test]
+    fn odd_bundle_urls_give_no_attestation_id() {
+        for url in [
+            "",
+            "53806567.json.sn",
+            "http://h/a/1.json.sn",
+            "https://h",
+            "https://h/",
+            "https://h/a/.json.sn",
+            "https://h/a/abc.json.sn",
+            "https://h/a/12a.json.sn",
+            "https://h/a/-5.json.sn",
+            "https://h/a/+5.json.sn",
+            "https://h/a/0.json.sn",
+            "https://h/a/1234567890123456789.json.sn",
+            "https://h/a/1.json.sn/",
+            "https://h/a/1.txt",
+            "https://h/a/1",
+            "https://h/a/1.json.snx",
+            // a number only in the query or fragment must not count
+            "https://h/a/x.json.sn?id=5.json",
+            "https://h/a/x.json.sn#5.json",
+            "https://h/a/b?c=/7.json.sn",
+            "https://h/a/\u{0661}.json.sn",
+            "https://h/a/1\n.json.sn",
+        ] {
+            assert_eq!(attestation_id(url), None, "{url:?}");
+        }
+    }
 
     #[test]
     fn repo_validation() {
@@ -276,6 +335,29 @@ mod tests {
                 .await;
             assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn the_page_id_follows_its_bundle_and_skipped_entries_do_not_shift_it() {
+        let bundle = include_str!("../tests/fixtures/cli-2.102.0-windows-amd64-zip.bundle.json");
+        let url = "https://blob.example/attestations/1/2026/10/08/53806567.json.sn?sig=1";
+        let body = format!(
+            r#"{{"attestations":[{{"bundle":{{"junk":1}}}},{{"bundle":{bundle},"bundle_url":"{url}"}}]}}"#
+        );
+        let response: &'static str = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_boxed_str(),
+        );
+        let (base, _) = serve(vec![response]);
+        let fetched = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap();
+        assert_eq!((fetched.bundles.len(), fetched.skipped), (1, 1));
+        assert_eq!(fetched.attestation_id(0), Some(53_806_567));
     }
 
     #[tokio::test]
