@@ -3,6 +3,9 @@
 //! The identity in a [`Report`] always comes from the verified certificate; the repo
 //! embedded in the file is only a claim to compare against.
 
+mod claim;
+mod claim_format;
+mod elf;
 mod github;
 mod identity;
 mod pe;
@@ -10,11 +13,14 @@ mod provider;
 mod rekor;
 mod verify;
 
+pub use claim::{read_claim, read_claim_file, ClaimError};
+pub use claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE, ELF_SECTION, PE_KEY};
+#[cfg(feature = "test-fixtures")]
+pub use elf::fixture as elf_fixture;
 pub use github::{valid_repo, GithubProvider};
 pub use identity::Identity;
 #[cfg(feature = "test-fixtures")]
 pub use pe::fixture;
-pub use pe::{read_claim, read_claim_file, PeError, CLAIM_KEY};
 pub use provider::{Fetched, Provider, ProviderError, RateLimit};
 pub use rekor::RekorProvider;
 pub use sigstore_verify::trust_root::TrustedRoot;

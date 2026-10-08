@@ -1,10 +1,6 @@
 use pelite::{pe32, pe64};
 
-pub const CLAIM_KEY: &str = "ProvenanceRepo";
-
-#[derive(Debug, thiserror::Error)]
-#[error("not a readable PE file: {0}")]
-pub struct PeError(String);
+use crate::claim_format::PE_KEY;
 
 macro_rules! claim_from {
     ($pe:ident, $image:expr) => {
@@ -14,7 +10,7 @@ macro_rules! claim_from {
             let mut found = None;
             if let Some(info) = pe.resources().ok().and_then(|r| r.version_info().ok()) {
                 for lang in info.translation() {
-                    if let Some(value) = info.value(*lang, CLAIM_KEY) {
+                    if let Some(value) = info.value(*lang, PE_KEY) {
                         let value = value.trim().to_string();
                         if !value.is_empty() {
                             found = Some(value);
@@ -29,18 +25,9 @@ macro_rules! claim_from {
 }
 
 /// Reads the `ProvenanceRepo` version-resource string. Pure parsing, so it works off Windows.
-/// `Ok(None)` means a valid PE without that string; the value is an unverified claim.
-pub fn read_claim(image: &[u8]) -> Result<Option<String>, PeError> {
-    claim_from!(pe64, image)
-        .or_else(|first| claim_from!(pe32, image).map_err(|_| first))
-        .map_err(PeError)
-}
-
-/// Like [`read_claim`] but maps the file instead of reading it, so a large exe is not loaded.
-pub fn read_claim_file(path: &std::path::Path) -> Result<Option<String>, PeError> {
-    let map =
-        pelite::FileMap::open(path).map_err(|e| PeError(format!("{}: {e}", path.display())))?;
-    read_claim(map.as_ref())
+/// `Ok(None)` means a valid PE without that string.
+pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
+    claim_from!(pe64, image).or_else(|first| claim_from!(pe32, image).map_err(|_| first))
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -190,20 +177,5 @@ mod tests {
     fn missing_key_is_none() {
         let pe = pe_with_version_strings(&[("ProductName", "Demo")]);
         assert_eq!(read_claim(&pe).unwrap(), None);
-    }
-
-    #[test]
-    fn reads_claim_from_a_file_on_disk() {
-        let dir = std::env::temp_dir().join(format!("pc-claim-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("app.exe");
-        std::fs::write(&file, pe_with_version_strings(&[("ProvenanceRepo", "a/b")])).unwrap();
-        assert_eq!(read_claim_file(&file).unwrap().as_deref(), Some("a/b"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn non_pe_is_an_error() {
-        assert!(read_claim(b"hello world, not an exe").is_err());
     }
 }

@@ -1,3 +1,5 @@
+include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
+
 use clap::Parser;
 use provenance_core::{
     load_trusted_root, verify_file, GithubProvider, Options, Provider, RekorProvider, Report,

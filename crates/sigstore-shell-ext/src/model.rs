@@ -1,4 +1,4 @@
-use provenance_core::{valid_repo, Identity, PeError, Report, Status};
+use provenance_core::{valid_repo, ClaimError, Identity, Report, Status};
 
 /// What the file says about itself. Never trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,7 +10,7 @@ pub enum Claim {
 }
 
 impl Claim {
-    pub fn from_read(read: Result<Option<String>, PeError>) -> Self {
+    pub fn from_read(read: Result<Option<String>, ClaimError>) -> Self {
         match read {
             Ok(None) => Self::Absent,
             Ok(Some(c)) if valid_repo(&c) => Self::Repo(c),
@@ -315,7 +315,7 @@ mod tests {
             Claim::from_read(Ok(Some("a/../b".into()))),
             Claim::Invalid("a/../b".into())
         );
-        let err = provenance_core::read_claim(b"junk").unwrap_err();
+        let err = provenance_core::read_claim(b"MZ").unwrap_err();
         assert_eq!(Claim::from_read(Err(err)), Claim::Unreadable);
     }
 
