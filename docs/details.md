@@ -50,6 +50,7 @@ A native 64-bit COM DLL (`crates/sigstore-shell-ext`, Rust) that adds a **Proven
 make dll          # dist/sigstore_shell_ext.dll, cross-compiled to x86_64-pc-windows-gnu in the container
 make wine-smoke   # registers, loads and unloads the DLL under Wine (headless)
 make wine-ui      # also builds the page under a virtual display and presses Verify (needs network)
+# cargo build --features demo-report (test hook) lets SIGSTORE_SHELL_DEMO_REPORT=<report.json> show a fixed report in the tab without a lookup; releases never enable it.
 ```
 
 The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs no Rust or MinGW runtime. TLS is rustls with the platform verifier, so certificates are checked against the Windows certificate store and no OpenSSL or bundled root list is involved. It is 64-bit only, so 32-bit programs that show Properties will not load it.

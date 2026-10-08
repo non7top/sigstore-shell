@@ -121,7 +121,9 @@ pub struct View {
     /// Bold repository name: the file's claim, or after a result the certificate's repository.
     pub repo: String,
     pub repo_tone: Tone,
-    /// Normal-weight text under the repo: "(claimed, not verified)", `@ short-commit`, or why there is no repo.
+    /// Normal-weight `@ short-commit` on the same line as the repo.
+    pub repo_suffix: String,
+    /// Normal-weight line under the repo: "(claimed, not verified)", or why there is no repo.
     pub repo_note: String,
     pub outcome: Outcome,
     pub headline: String,
@@ -371,11 +373,18 @@ fn identity_rows(id: &Identity) -> Vec<(String, String)> {
     rows
 }
 
+struct RepoLine {
+    name: String,
+    tone: Tone,
+    suffix: String,
+    note: String,
+}
+
 struct Done {
     outcome: Outcome,
     headline: String,
     /// Set when the certificate names a repository to show instead of the claim.
-    repo: Option<(String, Tone, String)>,
+    repo: Option<RepoLine>,
     links: Vec<Link>,
     rows: Vec<(String, String)>,
 }
@@ -442,16 +451,22 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
         rows.extend(identity_rows(id));
         if let Some(cert_repo) = &id.repo {
             let short = id.commit.as_deref().and_then(short_commit);
-            let note = short.map_or(String::new(), |c| format!("@ {c}"));
+            let suffix = short.map_or(String::new(), |c| format!("@ {c}"));
+            let line = |tone, note| RepoLine {
+                name: cert_repo.clone(),
+                tone,
+                suffix: suffix.clone(),
+                note,
+            };
             match report.status {
-                Status::Verified => repo = Some((cert_repo.clone(), Tone::Normal, note)),
+                Status::Verified => repo = Some(line(Tone::Normal, String::new())),
                 Status::Mismatch => {
                     let claimed = claim
                         .repo()
                         .or(report.queried_repo.as_deref())
                         .unwrap_or("?");
                     let note = format!("signed for this repository; the file claims {claimed}");
-                    repo = Some((cert_repo.clone(), Tone::Bad, note));
+                    repo = Some(line(Tone::Bad, note));
                 }
                 _ => {}
             }
@@ -512,6 +527,7 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
     let mut v = View {
         repo,
         repo_tone: Tone::Normal,
+        repo_suffix: String::new(),
         repo_note,
         outcome: Outcome::None,
         headline: String::new(),
@@ -545,10 +561,11 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
         }
         State::Done(report) => {
             let d = done_view(report, claim, env);
-            if let Some((repo, tone, note)) = d.repo {
-                v.repo = repo;
-                v.repo_tone = tone;
-                v.repo_note = note;
+            if let Some(line) = d.repo {
+                v.repo = line.name;
+                v.repo_tone = line.tone;
+                v.repo_suffix = line.suffix;
+                v.repo_note = line.note;
             }
             v.outcome = d.outcome;
             v.headline = d.headline;
@@ -704,7 +721,8 @@ mod tests {
         assert!(!v.headline.to_lowercase().contains("safe"));
         assert_eq!(v.repo, "cli/cli");
         assert_eq!(v.repo_tone, Tone::Normal);
-        assert_eq!(v.repo_note, "@ fc4b137c");
+        assert_eq!(v.repo_suffix, "@ fc4b137c");
+        assert_eq!(v.repo_note, "");
     }
 
     #[test]

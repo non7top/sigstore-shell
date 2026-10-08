@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Explorer property-sheet extension that shows an exe's Sigstore provenance"
 
+[features]
+# Test hook: SIGSTORE_SHELL_DEMO_REPORT=<report.json> shows that report without a lookup. Never enabled in releases.
+demo-report = []
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

@@ -241,14 +241,17 @@ mod imp {
             "Verify enabled for a file with a claim",
             unsafe { IsWindowEnabled(verify) }.as_bool(),
         );
-        unsafe {
-            SendMessageW(
-                page_hwnd,
-                windows::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                Some(WPARAM(107)),
-                Some(LPARAM(verify.0 as isize)),
-            )
-        };
+        let demo = std::env::var_os("SIGSTORE_SHELL_DEMO_REPORT").is_some();
+        if !demo {
+            unsafe {
+                SendMessageW(
+                    page_hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+                    Some(WPARAM(107)),
+                    Some(LPARAM(verify.0 as isize)),
+                )
+            };
+        }
         let _ = BM_CLICK;
         pump(300);
         println!("after click: {}", text(page_hwnd, 102));

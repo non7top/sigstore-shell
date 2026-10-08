@@ -20,6 +20,7 @@ pub const IDC_FOOTER: u16 = 115;
 pub const IDC_ICON: u16 = 116;
 pub const IDC_RATE: u16 = 117;
 pub const IDC_SEPARATOR: u16 = 118;
+pub const IDC_REPO_SUFFIX: u16 = 119;
 
 pub const MARGIN: i16 = 7;
 pub const CONTENT_WIDTH: i16 = 238;
@@ -116,7 +117,7 @@ fn items() -> Vec<Item> {
         ),
         item(
             Class::Static,
-            "Provenance: where this file came from, which repo and which workflow published it.",
+            "Provenance: which repo and workflow published this file.",
             IDC_EXPLAIN,
             vis | SS_NOPREFIX,
             (7, 3, 238, 9),
@@ -126,12 +127,13 @@ fn items() -> Vec<Item> {
             vis | SS_ENDELLIPSIS,
             (7, REPO_ROW, REPO_WIDTH, 12),
         ),
+        label(IDC_REPO_SUFFIX, vis, (7, REPO_ROW, 40, 12)),
         label(IDC_REPO_NOTE, vis, (7, 28, 238, 9)),
         Item {
             ex_style: WS_EX_TRANSPARENT,
-            ..label(IDC_GLYPH, WS_CHILD | SS_CENTER, (7, 14, 14, 14))
+            ..label(IDC_GLYPH, WS_CHILD | SS_CENTER, (7, 13, 14, 14))
         },
-        label(IDC_ICON, WS_CHILD | SS_OWNERDRAW, (7, 14, 16, 16)),
+        label(IDC_ICON, WS_CHILD | SS_OWNERDRAW, (7, 13, 14, 14)),
         label(IDC_HEADLINE, vis, HEADLINE_RECT),
         label(IDC_CONSENT, vis, (7, VERDICT_ROW, 238, 24)),
         item(

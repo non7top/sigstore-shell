@@ -1,8 +1,9 @@
 use crate::dlgtemplate::{
-    build, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT, ICON_VERIFIED, ICON_WARNING,
-    IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN, IDC_FOOTER,
-    IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT, IDC_RATE,
-    IDC_REPO, IDC_REPO_NOTE, IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW, REPO_WIDTH,
+    build, CONTENT_WIDTH, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT, ICON_VERIFIED,
+    ICON_WARNING, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN,
+    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT,
+    IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX, IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW,
+    REPO_WIDTH, VERDICT_ROW,
 };
 use crate::dll::{guard_value, module, Live};
 use crate::links::{openable, strip_markup, FOOTER_MARKUP, FOOTER_URLS};
@@ -16,14 +17,16 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use windows::core::{w, Result, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    GlobalFree, COLORREF, E_FAIL, HANDLE, HINSTANCE, HWND, LPARAM, RECT, WPARAM,
+    GlobalFree, COLORREF, E_FAIL, HANDLE, HINSTANCE, HWND, LPARAM, RECT, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateFontW, DeleteObject, GetDC, GetDeviceCaps, GetObjectW,
-    GetStockObject, GetSysColor, InvalidateRect, ReleaseDC, SetBkMode, SetTextColor,
-    CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_QUALITY,
-    FF_DONTCARE, FW_BOLD, FW_NORMAL, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, TRANSPARENT,
+    CreateFontIndirectW, CreateFontW, DeleteObject, DrawTextW, GetDC, GetDeviceCaps, GetObjectW,
+    GetStockObject, GetSysColor, GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect,
+    RedrawWindow, ReleaseDC, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS,
+    COLOR_GRAYTEXT, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_QUALITY, DT_CALCRECT, DT_NOPREFIX,
+    DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY,
+    NULL_BRUSH, OUT_DEFAULT_PRECIS, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW,
+    TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -56,6 +59,7 @@ const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 const WM_APP_UPDATE: u32 = WM_APP + 1;
 const BN_CLICKED: u32 = 0;
 const EM_SETSEL: u32 = 0xB1;
+const EM_GETLINECOUNT: u32 = 0xBA;
 const CF_UNICODETEXT: u32 = 13;
 const LWS_TRANSPARENT: u32 = 0x0001;
 const TTS_ALWAYSTIP: u32 = 0x01;
@@ -121,6 +125,7 @@ struct PageData {
     ui: RefCell<Ui>,
     outcome: Cell<Outcome>,
     tone: Cell<Tone>,
+    shape: Cell<u64>,
     /// Symbol, monospace, bold and small fonts, created on init and freed on destroy.
     fonts: Cell<[isize; 4]>,
     has_link_class: Cell<bool>,
@@ -148,6 +153,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
         }),
         outcome: Cell::new(Outcome::None),
         tone: Cell::new(Tone::Normal),
+        shape: Cell::new(0),
         fonts: Cell::new([0; 4]),
         has_link_class: Cell::new(false),
         icon: Cell::new(0),
@@ -506,7 +512,7 @@ unsafe fn open_url(hwnd: HWND, url: &str) {
     );
 }
 
-unsafe fn move_item(hwnd: HWND, id: u16, x: i16, y: i16, w: i16, h: i16) {
+unsafe fn du(hwnd: HWND, x: i16, y: i16, w: i16, h: i16) -> RECT {
     let mut r = RECT {
         left: i32::from(x),
         top: i32::from(y),
@@ -514,17 +520,187 @@ unsafe fn move_item(hwnd: HWND, id: u16, x: i16, y: i16, w: i16, h: i16) {
         bottom: i32::from(y + h),
     };
     let _ = MapDialogRect(hwnd, &mut r);
+    r
+}
+
+unsafe fn place(hwnd: HWND, id: u16, x: i32, y: i32, w: i32, h: i32) {
     if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(id)) {
-        let _ = SetWindowPos(
-            item,
-            None,
-            r.left,
-            r.top,
-            r.right - r.left,
-            r.bottom - r.top,
-            SWP_NOZORDER | SWP_NOACTIVATE,
+        let _ = SetWindowPos(item, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+/// Runs `f` with a DC that has the control's own font selected.
+unsafe fn with_font_dc<T>(hwnd: HWND, id: u16, f: impl FnOnce(HDC) -> T) -> Option<T> {
+    let item = GetDlgItem(Some(hwnd), i32::from(id)).ok()?;
+    let dc = GetDC(Some(item));
+    let font = SendMessageW(item, WM_GETFONT, None, None).0;
+    let old = (font != 0).then(|| SelectObject(dc, HGDIOBJ(font as *mut _)));
+    let out = f(dc);
+    if let Some(old) = old {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(Some(item), dc);
+    Some(out)
+}
+
+unsafe fn text_width(hwnd: HWND, id: u16, text: &str) -> i32 {
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.is_empty() {
+        return 0;
+    }
+    with_font_dc(hwnd, id, |dc| {
+        let mut size = SIZE::default();
+        let _ = GetTextExtentPoint32W(dc, &wide, &mut size);
+        size.cx
+    })
+    .unwrap_or(0)
+}
+
+unsafe fn wrapped_height(hwnd: HWND, id: u16, text: &str, width: i32) -> i32 {
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.is_empty() {
+        return 0;
+    }
+    with_font_dc(hwnd, id, |dc| {
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: 0,
+        };
+        DrawTextW(
+            dc,
+            &mut wide,
+            &mut r,
+            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+        );
+        r.bottom
+    })
+    .unwrap_or(0)
+}
+
+/// Positions everything from the content: controls are stacked top down in pixels, so none can overlap
+/// and the details box is exactly as tall as its text (up to the space above the buttons).
+struct Stack {
+    left: i32,
+    y: i32,
+    w: i32,
+    gap: i32,
+}
+
+impl Stack {
+    unsafe fn put(&mut self, hwnd: HWND, id: u16, h: i32) {
+        place(hwnd, id, self.left, self.y, self.w, h.max(1));
+        self.y += h + self.gap;
+    }
+}
+
+unsafe fn layout(hwnd: HWND, v: &View, has_icon: bool, details_shown: bool) {
+    let line = du(hwnd, MARGIN, REPO_ROW, REPO_WIDTH, 12);
+    let left = du(hwnd, MARGIN, 0, 0, 0).left;
+    let full_w = du(hwnd, 0, 0, CONTENT_WIDTH, 0).right;
+    let gap = du(hwnd, 0, 0, 0, 3).bottom;
+    let x0 = line.left
+        + if has_icon {
+            du(hwnd, ICON_SLOT, 0, 0, 0).left
+        } else {
+            0
+        };
+    let name_w = (text_width(hwnd, IDC_REPO, &v.repo) + 6).min(line.right - x0);
+    place(hwnd, IDC_REPO, x0, line.top, name_w, line.bottom - line.top);
+    let x1 = x0 + name_w + gap;
+    let suffix_w = (line.right - x1).max(0);
+    let suffix = !v.repo_suffix.is_empty() && suffix_w > gap * 4;
+    show(hwnd, IDC_REPO_SUFFIX, suffix);
+    if suffix {
+        place(
+            hwnd,
+            IDC_REPO_SUFFIX,
+            x1,
+            line.top,
+            suffix_w,
+            line.bottom - line.top,
         );
     }
+
+    let y = du(hwnd, 0, VERDICT_ROW, 0, 0).top;
+    let mut stack = Stack {
+        left,
+        y,
+        w: full_w,
+        gap,
+    };
+    let verdict_h = wrapped_height(hwnd, IDC_HEADLINE, &v.headline, full_w);
+    place(hwnd, IDC_HEADLINE, left, stack.y, full_w, verdict_h.max(1));
+    let mut top_h = verdict_h;
+    if v.show_consent {
+        let consent_h = wrapped_height(hwnd, IDC_CONSENT, &v.consent, full_w);
+        place(hwnd, IDC_CONSENT, left, stack.y, full_w, consent_h.max(1));
+        top_h = top_h.max(consent_h);
+    }
+    stack.y += top_h + gap;
+    if v.running {
+        stack.put(hwnd, IDC_PROGRESS, du(hwnd, 0, 0, 0, 8).bottom);
+        stack.put(hwnd, IDC_PROGRESS_TEXT, du(hwnd, 0, 0, 0, 10).bottom);
+    }
+    if !v.links.is_empty() {
+        stack.put(hwnd, IDC_LINKS, du(hwnd, 0, 0, 0, 10).bottom);
+    }
+    if details_shown {
+        let limit = du(hwnd, 0, 164, 0, 0).top - gap;
+        let lines = GetDlgItem(Some(hwnd), i32::from(IDC_DETAILS))
+            .map_or(1, |e| SendMessageW(e, EM_GETLINECOUNT, None, None).0 as i32);
+        let text_h = with_font_dc(hwnd, IDC_DETAILS, |dc| {
+            let mut tm = TEXTMETRICW::default();
+            let _ = GetTextMetricsW(dc, &mut tm);
+            tm.tmHeight + tm.tmExternalLeading
+        })
+        .unwrap_or(14);
+        let h = (lines * text_h + 2 * gap).min(limit - stack.y).max(text_h);
+        stack.put(hwnd, IDC_DETAILS, h);
+        let buttons = du(hwnd, 0, 0, 0, 14).bottom;
+        let sw = du(hwnd, 0, 0, 62, 0).right;
+        place(hwnd, IDC_COPY_SHA, left, stack.y, sw, buttons);
+        let sig_w = du(hwnd, 0, 0, 56, 0).right;
+        place(
+            hwnd,
+            IDC_COPY_SIGNER,
+            left + sw + gap,
+            stack.y,
+            sig_w,
+            buttons,
+        );
+        stack.y += buttons + gap;
+        place(
+            hwnd,
+            IDC_RATE,
+            left,
+            stack.y,
+            full_w,
+            du(hwnd, 0, 0, 0, 9).bottom,
+        );
+    }
+}
+
+/// Changes whenever the layout may have moved, so stale pixels get erased.
+fn shape_key(v: &View, has_icon: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        has_icon,
+        &v.repo,
+        &v.repo_suffix,
+        &v.repo_note,
+        &v.headline,
+        v.links.len(),
+        v.running,
+        v.show_consent,
+        v.rows.len(),
+        v.notes.len(),
+        v.rate_line.is_some(),
+    )
+        .hash(&mut h);
+    h.finish()
 }
 
 unsafe fn render(hwnd: HWND, data: &PageData) {
@@ -533,16 +709,8 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
     data.tone.set(v.repo_tone);
     // The icon gets its own column only when there is one, so the text edge never shifts otherwise.
     let has_icon = v.outcome != Outcome::None;
-    let indent = if has_icon { ICON_SLOT } else { 0 };
-    move_item(
-        hwnd,
-        IDC_REPO,
-        MARGIN + indent,
-        REPO_ROW,
-        REPO_WIDTH - indent,
-        12,
-    );
     set_text(hwnd, IDC_REPO, &v.repo);
+    set_text(hwnd, IDC_REPO_SUFFIX, &v.repo_suffix);
     set_text(hwnd, IDC_REPO_NOTE, &v.repo_note);
     if data.outcome.replace(v.outcome) != v.outcome {
         show_outcome(hwnd, data, v.outcome);
@@ -568,6 +736,16 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
     show(hwnd, IDC_CONSENT, v.show_consent);
     set_text(hwnd, IDC_VERIFY, &v.verify_label);
     set_text(hwnd, IDC_PROGRESS_TEXT, &v.progress_text);
+    layout(hwnd, &v, has_icon, details);
+    let shape = shape_key(&v, has_icon);
+    if data.shape.replace(shape) != shape {
+        let _ = RedrawWindow(
+            Some(hwnd),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
+    }
     show(hwnd, IDC_PROGRESS, v.running);
     show(hwnd, IDC_CANCEL, v.running);
     show(hwnd, IDC_VERIFY, !v.running);
@@ -606,7 +784,26 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
     create_text(hwnd, IDC_LINKS, LINKS_RECT, "", data);
     create_text(hwnd, IDC_FOOTER, FOOTER_RECT, FOOTER_MARKUP, data);
     add_tooltip(hwnd);
+    #[cfg(feature = "demo-report")]
+    inject_demo_report(data);
     render(hwnd, data);
+}
+
+#[cfg(feature = "demo-report")]
+fn inject_demo_report(data: &PageData) {
+    let Some(path) = std::env::var_os("SIGSTORE_SHELL_DEMO_REPORT") else {
+        return;
+    };
+    let report = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+    if let Some(report) = report {
+        data.mailbox.post(Event::Start { job: 0 });
+        data.mailbox.post(Event::Finished {
+            job: 0,
+            result: Ok(Box::new(report)),
+        });
+    }
 }
 
 /// Explains the counter in the Verify label; the text is static, so the tooltip may keep the pointer.
