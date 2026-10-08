@@ -86,6 +86,15 @@ jobs:
             dist/sigstore-shell-ext-*-windows-x64.zip
             dist/SHA256SUMS
 
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless: the job's OIDC token buys a short-lived Fulcio cert and the signature goes to Rekor, so no key is held.
+      - name: Sign the release files (cosign, keyless)
+        run: |
+          for f in dist/sigstore_shell_ext.dll dist/sigstore-shell-cli.exe dist/sigstore-shell-cli dist/sigstore-shell-ext-*-windows-x64.zip dist/SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$f.cosign.bundle" "$f"
+          done
+
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -93,4 +102,4 @@ jobs:
         run: >-
           gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY"
           dist/sigstore_shell_ext.dll dist/sigstore-shell-cli.exe dist/sigstore-shell-cli
-          dist/sigstore-shell-ext-*-windows-x64.zip dist/SHA256SUMS
+          dist/sigstore-shell-ext-*-windows-x64.zip dist/SHA256SUMS dist/*.cosign.bundle

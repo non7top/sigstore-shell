@@ -69,10 +69,16 @@ Releases are built by GitHub Actions from this repo and attested with `actions/a
 - `sigstore-shell-ext-<version>-windows-x64.zip`: the DLL, `register.ps1`, `unregister.ps1`, the Inno Setup script and install notes
 - `sigstore_shell_ext.dll`, `sigstore-shell-cli.exe` (Windows), `sigstore-shell-cli` (Linux x86-64)
 - `SHA256SUMS`
+- a `.cosign.bundle` next to each file above (keyless cosign signature)
 
 ```sh
 gh release download v0.1.0 --repo non7top/sigstore-shell
 gh attestation verify sigstore-shell-ext-0.1.0-windows-x64.zip --repo non7top/sigstore-shell
+
+# or with cosign
+cosign verify-blob --bundle sigstore-shell-cli.cosign.bundle \
+  --certificate-identity-regexp '^https://github.com/non7top/sigstore-shell/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com sigstore-shell-cli
 ```
 
 Then unzip and follow `INSTALL.md` in the zip, or the steps below. Releases are cut by merging the release-please PR; commits must follow [Conventional Commits](https://www.conventionalcommits.org/).
