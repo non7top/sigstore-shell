@@ -28,6 +28,7 @@ The signing, the records and the checking already exist. This project only puts 
 - **Sigstore** (short-lived Fulcio certificates, the Rekor log, a public trust root) does the signing. The publisher holds no key, and neither do we.
 - **GitHub artifact attestations**, made by `actions/attest-build-provenance`, are the records we look up: in-toto statements with SLSA build provenance v1, as in the real cli/cli attestation we test against.
 - **[sigstore-verify](https://crates.io/crates/sigstore-verify)** does the verification. We wrote no cryptography.
+- **Where the trust sits:** not in a key or trust chain of ours. It rests on Sigstore's public roots, on GitHub saying which workflow ran, and on the public traces left behind: the signature goes into a public log and the build log is public, so a false claim can be found later.
 - What we add: the tie. The embedded `owner/repo` points the file at a public place to ask, and the tool asks it for you and shows the answer next to the file.
 
 ## Use
