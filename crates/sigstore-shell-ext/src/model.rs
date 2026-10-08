@@ -1,3 +1,4 @@
+use crate::links::{commit_url, run_url, short_commit, workflow_url, Link};
 use provenance_core::{valid_repo, ClaimError, Identity, Report, Status};
 
 /// What the file says about itself. Never trusted.
@@ -87,24 +88,78 @@ impl State {
     }
 }
 
+/// Which indicator the page shows beside the verdict; colour is chosen by the UI, never the only signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    None,
+    Good,
+    Bad,
+    Neutral,
+    Warn,
+}
+
+impl Outcome {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Good => "\u{2714}",
+            Self::Bad => "\u{2716}",
+            Self::Neutral => "\u{2013}",
+            Self::Warn => "\u{26A0}",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
     pub claim_line: String,
+    pub outcome: Outcome,
     pub headline: String,
+    /// `repo @ short-commit`, only for a certificate that names both.
+    pub summary: String,
+    pub links: Vec<Link>,
     pub rows: Vec<(String, String)>,
     pub notes: Vec<String>,
+    pub sha256: Option<String>,
+    pub signer: Option<String>,
     pub consent: String,
+    pub show_consent: bool,
+    pub verify_label: &'static str,
     pub can_verify: bool,
     pub running: bool,
     pub progress_text: String,
 }
 
+const LABEL_WIDTH: usize = 12;
+
 impl View {
     /// Text for the read-only details box, with CRLF as Win32 edit controls expect.
     pub fn details_text(&self) -> String {
-        let rows = self.rows.iter().map(|(k, v)| format!("{k}: {v}"));
-        let notes = self.notes.iter().map(|n| format!("Note: {n}"));
-        rows.chain(notes).collect::<Vec<_>>().join("\r\n")
+        let mut lines = Vec::new();
+        for (k, v) in &self.rows {
+            if k == "SHA-256" && v.len() == 64 && v.is_ascii() {
+                lines.push(format!("{k}:"));
+                lines.push(format!("  {}", &v[..32]));
+                lines.push(format!("  {}", &v[32..]));
+            } else {
+                lines.push(format!("{:<LABEL_WIDTH$}{v}", format!("{k}:")));
+            }
+        }
+        lines.extend(self.notes.iter().map(|n| format!("Note: {n}")));
+        lines.join("\r\n")
+    }
+
+    pub fn has_details(&self) -> bool {
+        !self.rows.is_empty() || !self.notes.is_empty()
+    }
+
+    /// SysLink markup for the build links; empty when there are none.
+    pub fn links_markup(&self) -> String {
+        self.links
+            .iter()
+            .map(|l| format!("<a>{}</a>", l.label))
+            .collect::<Vec<_>>()
+            .join("   ")
     }
 }
 
@@ -166,7 +221,6 @@ fn identity_rows(id: &Identity) -> Vec<(String, String)> {
             rows.push((label.to_string(), v.clone()));
         }
     };
-    add("Repository", &id.repo);
     add("Owner", &id.owner);
     add("Workflow", &id.workflow);
     add("Commit", &id.commit);
@@ -176,12 +230,22 @@ fn identity_rows(id: &Identity) -> Vec<(String, String)> {
     rows
 }
 
-fn done_view(report: &Report, claim: &Claim) -> (String, Vec<(String, String)>) {
+struct Done {
+    outcome: Outcome,
+    headline: String,
+    summary: String,
+    links: Vec<Link>,
+    rows: Vec<(String, String)>,
+}
+
+fn done_view(report: &Report, claim: &Claim) -> Done {
     let mut rows = Vec::new();
+    let mut outcome = Outcome::Bad;
     let headline = match report.status {
-        Status::Verified => "Verified: this file's Sigstore attestation checks out. \
-            The details below come from its signing certificate."
-            .to_string(),
+        Status::Verified => {
+            outcome = Outcome::Good;
+            "Verified: this file's Sigstore attestation checks out.".to_string()
+        }
         Status::Mismatch => {
             let actual = report
                 .identity
@@ -196,10 +260,14 @@ fn done_view(report: &Report, claim: &Claim) -> (String, Vec<(String, String)>) 
                 "Mismatch: the file claims {claimed}, but its attestation was signed for {actual}."
             )
         }
-        Status::NoAttestation => "No attestation found for this file. \
+        Status::NoAttestation => {
+            outcome = Outcome::Neutral;
+            "No attestation found for this file. \
             This does not mean the file is unsafe; most files have none."
-            .to_string(),
+                .to_string()
+        }
         Status::LookupFailed => {
+            outcome = Outcome::Warn;
             let limited = report
                 .rate_limit
                 .as_ref()
@@ -214,16 +282,65 @@ fn done_view(report: &Report, claim: &Claim) -> (String, Vec<(String, String)>) 
             "Verification failed: an attestation exists but did not verify. Do not rely on it."
                 .to_string()
         }
-        Status::NotChecked => "Nothing was looked up.".to_string(),
+        Status::NotChecked => {
+            outcome = Outcome::Neutral;
+            "Nothing was looked up.".to_string()
+        }
     };
+    let mut summary = String::new();
+    let mut links = Vec::new();
     if let Some(id) = &report.identity {
         rows.extend(identity_rows(id));
+        if matches!(report.status, Status::Verified | Status::Mismatch) {
+            if let (Some(repo), Some(commit)) = (&id.repo, &id.commit) {
+                if let Some(short) = short_commit(commit) {
+                    summary = format!("{repo} @ {short}");
+                }
+            }
+        }
+        if report.status == Status::Verified {
+            links = build_links(id);
+        }
     }
     if let Some(p) = &report.provider {
         rows.push(("Answered by".into(), provider_label(p).into()));
     }
     rows.push(("SHA-256".into(), report.file_sha256.clone()));
-    (headline, rows)
+    Done {
+        outcome,
+        headline,
+        summary,
+        links,
+        rows,
+    }
+}
+
+fn build_links(id: &Identity) -> Vec<Link> {
+    let (Some(repo), Some(commit)) = (id.repo.as_deref(), id.commit.as_deref()) else {
+        return Vec::new();
+    };
+    let candidates = [
+        ("Commit", commit_url(repo, commit)),
+        (
+            "Workflow file",
+            id.workflow
+                .as_deref()
+                .and_then(|w| workflow_url(repo, commit, w)),
+        ),
+        (
+            "Build run",
+            id.run_url.as_deref().and_then(|u| run_url(repo, u)),
+        ),
+    ];
+    candidates
+        .into_iter()
+        .filter_map(|(label, url)| {
+            url.map(|url| Link {
+                label: label.into(),
+                url,
+            })
+        })
+        .collect()
 }
 
 pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
@@ -231,10 +348,17 @@ pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
     let running = state.is_running();
     let mut v = View {
         claim_line: claim_line(claim),
+        outcome: Outcome::None,
         headline: String::new(),
+        summary: String::new(),
+        links: Vec::new(),
         rows: Vec::new(),
         notes: Vec::new(),
+        sha256: None,
+        signer: None,
         consent: consent(rekor),
+        show_consent: true,
+        verify_label: "Verify",
         can_verify: can_search && !running,
         running,
         progress_text: String::new(),
@@ -256,13 +380,25 @@ pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
             };
         }
         State::Done(report) => {
-            let (headline, rows) = done_view(report, claim);
-            v.headline = headline;
-            v.rows = rows;
+            let d = done_view(report, claim);
+            v.outcome = d.outcome;
+            v.headline = d.headline;
+            v.summary = d.summary;
+            v.links = d.links;
+            v.rows = d.rows;
             v.notes = report.notes.clone();
+            v.sha256 = Some(report.file_sha256.clone());
+            v.signer = report.identity.as_ref().and_then(|i| i.san.clone());
+            v.show_consent = false;
+            v.verify_label = "Verify again";
         }
         State::Cancelled => v.headline = "Cancelled. Nothing was verified.".into(),
-        State::Failed(e) => v.headline = format!("Could not verify: {e}"),
+        State::Failed(e) => {
+            v.outcome = Outcome::Warn;
+            v.headline = format!("Could not verify: {e}");
+            v.show_consent = false;
+            v.verify_label = "Verify again";
+        }
     }
     v
 }
@@ -292,7 +428,13 @@ mod tests {
                 repo: Some("cli/cli".into()),
                 owner: Some("cli".into()),
                 workflow: Some(".github/workflows/deployment.yml".into()),
-                commit: Some("fc4b137c".into()),
+                commit: Some("fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b".into()),
+                git_ref: Some("refs/heads/trunk".into()),
+                run_url: Some("https://github.com/cli/cli/actions/runs/42/attempts/1".into()),
+                san: Some(
+                    "https://github.com/cli/cli/.github/workflows/deployment.yml@refs/heads/trunk"
+                        .into(),
+                ),
                 signed_at: Some("2026-09-30T12:34:56.789Z".into()),
                 ..Identity::default()
             }),
@@ -376,18 +518,114 @@ mod tests {
     }
 
     #[test]
-    fn verified_view_lists_certificate_identity_and_provider() {
+    fn verified_view_puts_repo_and_short_commit_up_top() {
+        let s = State::Done(Box::new(verified()));
+        let v = view(&Claim::Repo("cli/cli".into()), &s, false);
+        assert_eq!(v.outcome, Outcome::Good);
+        assert!(v.headline.starts_with("Verified") && v.headline.contains("checks out"));
+        assert!(!v.headline.to_lowercase().contains("safe"));
+        assert_eq!(v.summary, "cli/cli @ fc4b137c");
+    }
+
+    #[test]
+    fn verified_view_lists_details_below() {
         let s = State::Done(Box::new(verified()));
         let v = view(&Claim::Repo("cli/cli".into()), &s, false);
         let text = v.details_text();
-        assert!(v.headline.starts_with("Verified"));
-        assert!(text.contains("Repository: cli/cli"));
-        assert!(text.contains("Owner: cli"));
-        assert!(text.contains("Workflow: .github/workflows/deployment.yml"));
-        assert!(text.contains("Commit: fc4b137c"));
-        assert!(text.contains("Signed: 2026-09-30 12:34:56 UTC"));
+        assert!(text.contains("Owner:       cli"));
+        assert!(text.contains("Workflow:    .github/workflows/deployment.yml"));
+        assert!(text.contains("Commit:      fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b"));
+        assert!(text.contains("Ref:         refs/heads/trunk"));
+        assert!(text.contains("Signed:      2026-09-30 12:34:56 UTC"));
+        assert!(text.contains("Signer:      https://github.com/cli/cli/"));
         assert!(text.contains("Answered by: GitHub attestations"));
+        assert!(!text.contains("Repository"));
         assert!(text.contains("\r\n"));
+    }
+
+    #[test]
+    fn sha256_is_split_in_two_lines_but_copied_whole() {
+        let s = State::Done(Box::new(verified()));
+        let v = view(&Claim::Repo("cli/cli".into()), &s, false);
+        let text = v.details_text();
+        assert!(text.contains(&format!(
+            "SHA-256:\r\n  {}\r\n  {}",
+            "ab".repeat(16),
+            "ab".repeat(16)
+        )));
+        assert_eq!(v.sha256, Some("ab".repeat(32)));
+        assert!(v.signer.unwrap().ends_with("@refs/heads/trunk"));
+    }
+
+    #[test]
+    fn verified_view_links_commit_workflow_and_run() {
+        let s = State::Done(Box::new(verified()));
+        let v = view(&Claim::Repo("cli/cli".into()), &s, false);
+        let urls: Vec<_> = v.links.iter().map(|l| l.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "https://github.com/cli/cli/commit/fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b",
+                "https://github.com/cli/cli/blob/fc4b137c9e0a5d2b7f3e1a8c6d4b2f0e9a7c5d3b/.github/workflows/deployment.yml",
+                "https://github.com/cli/cli/actions/runs/42/attempts/1",
+            ]
+        );
+        assert_eq!(
+            v.links_markup(),
+            "<a>Commit</a>   <a>Workflow file</a>   <a>Build run</a>"
+        );
+    }
+
+    #[test]
+    fn hostile_certificate_values_yield_no_links() {
+        let mut r = verified();
+        let id = r.identity.as_mut().unwrap();
+        id.workflow = Some("../../evil".into());
+        id.run_url = Some("https://evil.example/cli/cli/actions/runs/1".into());
+        let v = view(&Claim::Absent, &State::Done(Box::new(r.clone())), true);
+        assert_eq!(v.links.len(), 1);
+        r.identity.as_mut().unwrap().repo = Some("cli/cli?x=1".into());
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        assert!(v.links.is_empty());
+    }
+
+    #[test]
+    fn only_a_verified_result_gets_links() {
+        let r = Report {
+            status: Status::Mismatch,
+            ..verified()
+        };
+        let v = view(&Claim::Repo("x/y".into()), &State::Done(Box::new(r)), false);
+        assert!(v.links.is_empty());
+        assert_eq!(v.outcome, Outcome::Bad);
+    }
+
+    #[test]
+    fn a_result_hides_the_consent_and_relabels_the_button() {
+        let before = view(&Claim::Repo("cli/cli".into()), &State::Idle, false);
+        assert!(before.show_consent);
+        assert_eq!(before.verify_label, "Verify");
+        assert_eq!(before.outcome, Outcome::None);
+        let done = view(
+            &Claim::Repo("cli/cli".into()),
+            &State::Done(Box::new(verified())),
+            false,
+        );
+        assert!(!done.show_consent);
+        assert_eq!(done.verify_label, "Verify again");
+        assert!(done.can_verify);
+    }
+
+    #[test]
+    fn outcome_per_status() {
+        let o = |s| view(&Claim::Absent, &State::Done(Box::new(report(s))), true).outcome;
+        assert_eq!(o(Status::Verified), Outcome::Good);
+        assert_eq!(o(Status::Mismatch), Outcome::Bad);
+        assert_eq!(o(Status::VerificationFailed), Outcome::Bad);
+        assert_eq!(o(Status::NoAttestation), Outcome::Neutral);
+        assert_eq!(o(Status::LookupFailed), Outcome::Warn);
+        assert_ne!(Outcome::Neutral.glyph(), Outcome::Bad.glyph());
+        assert_eq!(Outcome::None.glyph(), "");
     }
 
     #[test]

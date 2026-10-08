@@ -5,6 +5,7 @@
 pub mod cache;
 pub mod dlgtemplate;
 pub mod job;
+pub mod links;
 pub mod model;
 pub mod registration;
 pub mod settings;
