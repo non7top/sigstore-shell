@@ -1,8 +1,10 @@
 # sigstore-shell
 
-**Problem.** In 2026 the usual way to get software is to download a binary from GitHub and run it. The only thing vouching for it is that the source is open and the release came from that repo. Detached GPG signatures, once the norm, have mostly disappeared from releases, and nobody checks them anyway. Like Let's Encrypt replacing paid certificates, Sigstore changes the picture: every release can carry a signed, public record of which repo, workflow and commit built it. That is also more honest than a signature, because it states what built the file instead of who vouches for it.
+**Problem.** Releases are usually signed, and Windows will tell you who signed them: a company or a person. It does not tell you how the file was built or from which source code. That was always outside what a signature covers. Meanwhile the usual way to get software in 2026 is to download a binary from GitHub and run it, with the open repo as the only verification on offer, and detached GPG signatures, once common for this, have mostly gone.
 
-Windows will still show you nothing about it. This project covers that last step: the file on your disk.
+Sigstore provenance fills that gap: a signed, public record of which repo, workflow and commit built this exact file, which anyone can check against the source. As Let's Encrypt did for certificates, free and automatic issuance can change what people expect from a release. Provenance does not say the code is safe, only where the file came from.
+
+This project shows that record where you look at the file: the Properties dialog in Explorer, or a command.
 
 ## What it does
 
