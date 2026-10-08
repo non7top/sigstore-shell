@@ -110,4 +110,16 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn installer_script_writes_the_same_keys() {
+        let nsi = include_str!("../../../installer/sigstore-shell.nsi").replace('\\', "/");
+        let flat = |k: &str| k.replace('\\', "/");
+        assert!(nsi.contains(CLSID));
+        assert!(nsi.contains(DESCRIPTION));
+        assert!(nsi.contains("ThreadingModel"));
+        let handler = flat(&handler_key());
+        assert!(nsi.contains(&handler), "{handler}");
+        assert!(nsi.contains(&flat(approved_key())));
+    }
 }

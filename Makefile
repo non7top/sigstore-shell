@@ -4,7 +4,7 @@ export DOCKER_GID := $(shell id -g)
 CARGO := docker compose run --rm dev cargo
 WIN := x86_64-pc-windows-gnu
 
-.PHONY: build cli-win package dll fixture wine-smoke wine-ui test lint fmt shell
+.PHONY: build cli-win package installer dll fixture wine-smoke wine-ui test lint fmt shell
 
 build:
 	mkdir -p dist
@@ -16,9 +16,13 @@ cli-win:
 	$(CARGO) build --release --locked --target $(WIN) -p sigstore-shell-cli
 	docker compose run --rm dev cp /cargo-target/$(WIN)/release/sigstore-shell-cli.exe /app/dist/sigstore-shell-cli.exe
 
-# Needs dist/ from build, cli-win and dll; VERSION names the zip. --build picks up image changes.
+# Needs dist/ from build, cli-win, dll and installer; VERSION names the zip. --build picks up image changes.
 package:
 	docker compose run --rm --build dev ./scripts/package.sh $(VERSION)
+
+# Needs dist/sigstore_shell_ext.dll from dll. PROVENANCE_REPO, when set, becomes the installer's claim. --build picks up image changes.
+installer:
+	docker compose run --rm --build dev ./scripts/installer.sh $(VERSION)
 
 dll:
 	mkdir -p dist

@@ -30,14 +30,14 @@ handler='HKLM\Software\Classes\exefile\shellex\PropertySheetHandlers\SigstoreShe
 clsid='HKLM\Software\Classes\CLSID\{fbcd8210-9f9c-4b07-900a-ad12500a4363}\InprocServer32'
 
 wine regsvr32 /s "$dll"
-wine reg query "$handler"
-wine reg query "$clsid"
-wine reg query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved' | grep -i fbcd8210
+wine reg query "$handler" /reg:64
+wine reg query "$clsid" /reg:64
+wine reg query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved' /reg:64 | grep -i fbcd8210
 
 wine 'C:\sigstore-shell\smoke.exe' "$dll" 'C:\sigstore-shell\fixture.exe' "$@"
 
 wine regsvr32 /s /u "$dll"
-if wine reg query "$handler" >/dev/null 2>&1; then
+if wine reg query "$handler" /reg:64 >/dev/null 2>&1; then
     echo "FAIL handler key still present after unregister"
     exit 1
 fi

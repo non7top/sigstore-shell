@@ -38,7 +38,7 @@ gh release download --repo non7top/sigstore-shell
 sigstore-shell-cli verify app.exe
 ```
 
-Install the Explorer tab on Windows by running `register.ps1` from the release zip as administrator (`INSTALL.md` is in the zip). Releases are attested and cosign-signed (from the first one on); check a file with `gh attestation verify <file> --repo non7top/sigstore-shell`.
+Install the Explorer tab on Windows by running `sigstore-shell-Setup-<version>.exe` from the release, or `register.ps1` from the release zip as administrator (`INSTALL.md` is in the zip). Releases are attested and cosign-signed (from the first one on); check a file with `gh attestation verify <file> --repo non7top/sigstore-shell`.
 
 ## Status
 
