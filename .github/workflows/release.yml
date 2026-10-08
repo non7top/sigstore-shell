@@ -51,11 +51,15 @@ jobs:
     env:
       # Written into the version resource of the DLL and the Windows CLI at build time.
       PROVENANCE_REPO: ${{ github.repository }}
-      RELEASE_VERSION: ${{ substring(needs.check-release-tag.outputs.tag, 1) }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_sha }}
+
+      - name: Take the release version from the tag
+        run: echo "RELEASE_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+        env:
+          TAG: ${{ needs.check-release-tag.outputs.tag }}
 
       - name: Build the Explorer extension DLL
         run: make dll
@@ -67,7 +71,7 @@ jobs:
         run: make build
 
       - name: Package
-        run: make package VERSION=${TAG#v}
+        run: make package VERSION="${TAG#v}"
         env:
           TAG: ${{ needs.check-release-tag.outputs.tag }}
 
