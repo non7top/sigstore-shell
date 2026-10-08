@@ -34,7 +34,12 @@ wine reg query "$handler" /reg:64
 wine reg query "$clsid" /reg:64
 wine reg query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved' /reg:64 | grep -i fbcd8210
 
-wine 'C:\sigstore-shell\smoke.exe' "$dll" 'C:\sigstore-shell\fixture.exe' "$@"
+shot=
+case " $* " in
+*" --ui "*) shot="--shot Z:\\app\\dist\\tab" ;;
+esac
+# shellcheck disable=SC2086
+wine 'C:\sigstore-shell\smoke.exe' "$dll" 'C:\sigstore-shell\fixture.exe' "$@" $shot
 
 wine regsvr32 /s /u "$dll"
 if wine reg query "$handler" /reg:64 >/dev/null 2>&1; then

@@ -1,7 +1,8 @@
 use crate::dlgtemplate::{
-    build, FOOTER_RECT, IDC_CANCEL, IDC_CLAIM, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER,
-    IDC_DETAILS, IDC_DETAILS_LABEL, IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_LINKS, IDC_PROGRESS,
-    IDC_PROGRESS_TEXT, IDC_SUMMARY, IDC_VERIFY, LINKS_RECT,
+    build, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_VERIFIED, ICON_WARNING, IDC_CANCEL,
+    IDC_CLAIM, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER, IDC_DETAILS, IDC_DETAILS_LABEL,
+    IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_PROGRESS, IDC_PROGRESS_TEXT,
+    IDC_SUMMARY, IDC_VERIFY, LINKS_RECT,
 };
 use crate::dll::{guard_value, module, Live};
 use crate::links::{openable, strip_markup, FOOTER_MARKUP, FOOTER_URLS};
@@ -29,9 +30,9 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::Controls::{
-    CreatePropertySheetPageW, HPROPSHEETPAGE, NMHDR, NMLINK, NM_CLICK, NM_RETURN, PBM_SETMARQUEE,
-    PROPSHEETPAGEW, PROPSHEETPAGEW_0, PSPCB_MESSAGE, PSPCB_RELEASE, PSP_DLGINDIRECT,
-    PSP_USECALLBACK, PSP_USETITLE,
+    CreatePropertySheetPageW, DrawThemeParentBackground, HPROPSHEETPAGE, NMHDR, NMLINK, NM_CLICK,
+    NM_RETURN, PBM_SETMARQUEE, PROPSHEETPAGEW, PROPSHEETPAGEW_0, PSPCB_MESSAGE, PSPCB_RELEASE,
+    PSP_DLGINDIRECT, PSP_USECALLBACK, PSP_USETITLE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -42,6 +43,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
     WM_APP, WM_COMMAND, WM_CTLCOLORSTATIC, WM_DESTROY, WM_GETFONT, WM_INITDIALOG, WM_NOTIFY,
     WM_SETFONT, WS_CHILD, WS_TABSTOP,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, LoadImageW, HICON, IMAGE_ICON, LR_DEFAULTCOLOR, STM_SETICON,
 };
 
 /// DWLP_USER in winuser.h (DWLP_DLGPROC + pointer size); the windows crate only has the 32-bit DWL_USER.
@@ -103,6 +107,7 @@ struct PageData {
     /// Symbol and monospace fonts, created on init and freed on destroy.
     fonts: Cell<[isize; 2]>,
     has_link_class: Cell<bool>,
+    icon: Cell<isize>,
     _live: Live,
 }
 
@@ -124,6 +129,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
         outcome: Cell::new(Outcome::None),
         fonts: Cell::new([0; 2]),
         has_link_class: Cell::new(false),
+        icon: Cell::new(0),
         _live: Live::new(),
     }));
     let mut psp = PROPSHEETPAGEW {
@@ -312,6 +318,61 @@ unsafe fn create_text(
     }
 }
 
+fn icon_id(outcome: Outcome) -> Option<u16> {
+    match outcome {
+        Outcome::None => None,
+        Outcome::Good => Some(ICON_VERIFIED),
+        Outcome::Bad => Some(ICON_FAILED),
+        Outcome::Neutral => Some(ICON_NEUTRAL),
+        Outcome::Warn => Some(ICON_WARNING),
+    }
+}
+
+/// Shows the outcome icon, or the coloured text glyph when high contrast is on or the icon will not load.
+unsafe fn show_outcome(hwnd: HWND, data: &PageData, outcome: Outcome) {
+    let mut icon = HICON::default();
+    if let (Some(id), false) = (icon_id(outcome), high_contrast()) {
+        let dc = GetDC(Some(hwnd));
+        let dpi = GetDeviceCaps(Some(dc), LOGPIXELSY).max(96);
+        ReleaseDC(Some(hwnd), dc);
+        let px = 20 * dpi / 96;
+        if let Ok(h) = LoadImageW(
+            Some(HINSTANCE(module().0)),
+            PCWSTR(usize::from(id) as *const u16),
+            IMAGE_ICON,
+            px,
+            px,
+            LR_DEFAULTCOLOR,
+        ) {
+            icon = HICON(h.0);
+        }
+    }
+    if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(IDC_ICON)) {
+        let old = SendMessageW(
+            item,
+            STM_SETICON,
+            Some(WPARAM(icon.0 as usize)),
+            Some(LPARAM(0)),
+        );
+        if old.0 != 0 {
+            let _ = DestroyIcon(HICON(old.0 as *mut _));
+        }
+        data.icon.set(icon.0 as isize);
+        show(hwnd, IDC_ICON, !icon.is_invalid());
+    }
+    set_text(
+        hwnd,
+        IDC_GLYPH,
+        if icon.is_invalid() {
+            outcome.glyph()
+        } else {
+            ""
+        },
+    );
+    invalidate_item(hwnd, IDC_GLYPH);
+    invalidate_item(hwnd, IDC_ICON);
+}
+
 unsafe fn invalidate_item(hwnd: HWND, id: u16) {
     if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(id)) {
         let mut r = RECT::default();
@@ -383,8 +444,7 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
     };
     set_text(hwnd, IDC_CLAIM, &v.claim_line);
     if data.outcome.replace(v.outcome) != v.outcome {
-        set_text(hwnd, IDC_GLYPH, v.outcome.glyph());
-        invalidate_item(hwnd, IDC_GLYPH);
+        show_outcome(hwnd, data, v.outcome);
     }
     set_text(hwnd, IDC_HEADLINE, &v.headline);
     set_text(hwnd, IDC_SUMMARY, &v.summary);
@@ -572,8 +632,15 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_CTLCOLORSTATIC => {
                 let ctl = HWND(lparam.0 as *mut _);
                 if let Some(data) = data_of(hwnd) {
-                    if GetDlgCtrlID(ctl) == i32::from(IDC_GLYPH) {
+                    let id = GetDlgCtrlID(ctl);
+                    if id == i32::from(IDC_GLYPH) {
                         return glyph_brush(HDC(wparam.0 as *mut _), data);
+                    }
+                    if id == i32::from(IDC_ICON) {
+                        let hdc = HDC(wparam.0 as *mut _);
+                        let _ = DrawThemeParentBackground(ctl, hdc, None);
+                        SetBkMode(hdc, TRANSPARENT);
+                        return GetStockObject(NULL_BRUSH).0 as isize;
                     }
                 }
             }
@@ -587,6 +654,10 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     data.mailbox.hwnd.store(0, Ordering::Release);
                     data.ui.borrow().cancel.store(true, Ordering::Relaxed);
                     free_fonts(data);
+                    let icon = data.icon.replace(0);
+                    if icon != 0 {
+                        let _ = DestroyIcon(HICON(icon as *mut _));
+                    }
                 }
                 SetWindowLongPtrW(hwnd, DWLP_USER, 0);
             }

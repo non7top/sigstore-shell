@@ -1,5 +1,5 @@
 //! Loads the built DLL the way Explorer would and walks the COM entry points.
-//! Usage: smoke <dll> <exe> [--ui]   (meant to run under Wine; exits non-zero on the first failure)
+//! Usage: smoke <dll> <exe> [--ui [--shot <file.bmp>]]   (meant to run under Wine; exits non-zero on the first failure)
 
 #[cfg(not(windows))]
 fn main() {
@@ -15,6 +15,10 @@ mod imp {
     use windows::core::{implement, Interface, Ref, Result, BOOL, GUID, HRESULT, PCWSTR};
     use windows::Win32::Foundation::{
         CLASS_E_CLASSNOTAVAILABLE, E_NOTIMPL, HWND, LPARAM, S_FALSE, S_OK, WPARAM,
+    };
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, GetDC, GetDIBits, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
     };
     use windows::Win32::System::Com::{
         IAdviseSink, IClassFactory, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA,
@@ -32,8 +36,8 @@ mod imp {
     const PSH_USEHPSP: u32 = 0x100;
     use windows::Win32::UI::Shell::{IShellExtInit, IShellPropSheetExt, DROPFILES};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetDlgItem, GetWindowTextW, PeekMessageW, SendMessageW, TranslateMessage,
-        BM_CLICK, MSG, PM_REMOVE,
+        DispatchMessageW, GetDlgItem, GetWindowRect, GetWindowTextW, PeekMessageW, SendMessageW,
+        TranslateMessage, BM_CLICK, MSG, PM_REMOVE,
     };
 
     const CLSID: GUID = GUID::from_u128(0xfbcd8210_9f9c_4b07_900a_ad12500a4363);
@@ -144,7 +148,57 @@ mod imp {
         }
     }
 
-    fn ui(page: HPROPSHEETPAGE) {
+    /// Copies the window's pixels off the (virtual) screen into a top-down 32-bit BMP.
+    fn screenshot(hwnd: HWND, file: &str) {
+        let mut r = windows::Win32::Foundation::RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut r) }.expect("GetWindowRect");
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        unsafe {
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, w, h);
+            SelectObject(dc, bmp.into());
+            BitBlt(dc, 0, 0, w, h, Some(screen), r.left, r.top, SRCCOPY).expect("BitBlt");
+            GetDIBits(
+                dc,
+                bmp,
+                0,
+                h as u32,
+                Some(px.as_mut_ptr().cast()),
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+        }
+        let mut out = Vec::new();
+        out.extend(b"BM");
+        out.extend((54 + px.len() as u32).to_le_bytes());
+        out.extend([0u8; 4]);
+        out.extend(54u32.to_le_bytes());
+        out.extend(40u32.to_le_bytes());
+        out.extend(w.to_le_bytes());
+        out.extend((-h).to_le_bytes());
+        out.extend(1u16.to_le_bytes());
+        out.extend(32u16.to_le_bytes());
+        out.extend([0u8; 24]);
+        out.extend(px);
+        std::fs::write(file, out).expect("write screenshot");
+        println!("screenshot written: {file}");
+    }
+
+    fn ui(page: HPROPSHEETPAGE, shot: Option<&str>) {
         let mut pages = [page];
         let caption: Vec<u16> = "smoke\0".encode_utf16().collect();
         let header = PROPSHEETHEADERW_V2 {
@@ -174,6 +228,9 @@ mod imp {
             .0 as *mut c_void,
         );
         step("page dialog exists", !page_hwnd.0.is_null());
+        if let Some(f) = shot {
+            screenshot(sheet, &format!("{f}.before.bmp"));
+        }
         println!("claim:    {}", text(page_hwnd, 101));
         println!("headline: {}", text(page_hwnd, 102));
         println!("consent:  {}", text(page_hwnd, 104));
@@ -201,7 +258,26 @@ mod imp {
             }
         }
         println!("final headline: {}", text(page_hwnd, 102));
+        let icon = unsafe { GetDlgItem(Some(page_hwnd), 116) }.unwrap();
+        let got = unsafe {
+            SendMessageW(
+                icon,
+                windows::Win32::UI::WindowsAndMessaging::STM_GETICON,
+                None,
+                None,
+            )
+        };
+        println!(
+            "outcome icon handle: {:#x}, fallback glyph: {:?}",
+            got.0,
+            text(page_hwnd, 109)
+        );
+        println!("final summary: {}", text(page_hwnd, 110));
         println!("final details:\n{}", text(page_hwnd, 103));
+        pump(500);
+        if let Some(f) = shot {
+            screenshot(sheet, &format!("{f}.after.bmp"));
+        }
         let _ = DestroyPropertySheetPage;
     }
 
@@ -254,7 +330,11 @@ mod imp {
 
         let page = PAGES.with(|p| p.borrow()[0]);
         if with_ui {
-            ui(page);
+            let shot = args
+                .iter()
+                .position(|a| a == "--shot")
+                .map(|i| args[i + 1].as_str());
+            ui(page, shot);
         } else {
             step(
                 "page destroyed",

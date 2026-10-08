@@ -16,6 +16,14 @@ pub const IDC_COPY_SIGNER: u16 = 113;
 /// SysLink controls are created in code, so the page still opens where the class is missing.
 pub const IDC_LINKS: u16 = 114;
 pub const IDC_FOOTER: u16 = 115;
+/// Shows the outcome icon; the text glyph control takes over when high contrast is on.
+pub const IDC_ICON: u16 = 116;
+
+/// RT_GROUP_ICON ids written by build.rs.
+pub const ICON_VERIFIED: u16 = 201;
+pub const ICON_FAILED: u16 = 202;
+pub const ICON_NEUTRAL: u16 = 203;
+pub const ICON_WARNING: u16 = 204;
 
 pub const LINKS_RECT: (i16, i16, i16, i16) = (24, 62, 221, 10);
 pub const FOOTER_RECT: (i16, i16, i16, i16) = (7, 199, 238, 18);
@@ -33,6 +41,7 @@ const DS_SETFONT: u32 = 0x0040;
 const DS_CONTROL: u32 = 0x0400;
 const SS_NOPREFIX: u32 = 0x0080;
 const SS_CENTER: u32 = 0x0001;
+const SS_ICON: u32 = 0x0003;
 const ES_MULTILINE: u32 = 0x0004;
 const ES_AUTOVSCROLL: u32 = 0x0040;
 const ES_AUTOHSCROLL: u32 = 0x0080;
@@ -85,6 +94,7 @@ fn items() -> Vec<Item> {
             ex_style: WS_EX_TRANSPARENT,
             ..label(IDC_GLYPH, vis | SS_CENTER, (7, 25, 14, 20))
         },
+        label(IDC_ICON, vis | SS_ICON, (7, 25, 14, 14)),
         label(IDC_HEADLINE, vis, (24, 26, 221, 24)),
         label(IDC_SUMMARY, vis, (24, 52, 221, 9)),
         label(IDC_DETAILS_LABEL, WS_CHILD, (7, 75, 238, 9)),

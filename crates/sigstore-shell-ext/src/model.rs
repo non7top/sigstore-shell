@@ -130,7 +130,7 @@ pub struct View {
     pub progress_text: String,
 }
 
-const LABEL_WIDTH: usize = 12;
+const LABEL_WIDTH: usize = 13;
 
 impl View {
     /// Text for the read-only details box, with CRLF as Win32 edit controls expect.
