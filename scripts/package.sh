@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-cp dist/sigstore_shell_ext.dll installer/register.ps1 installer/unregister.ps1 installer/sigstore-shell.iss installer/INSTALL.md "$stage/"
+cp dist/sigstore_shell_ext.dll installer/register.ps1 installer/unregister.ps1 installer/INSTALL.md "$stage/"
 
 zip_name="sigstore-shell-ext-$version-windows-x64.zip"
 rm -f "dist/$zip_name"
@@ -15,4 +15,4 @@ rm -f "dist/$zip_name"
 
 cd dist
 rm -f SHA256SUMS
-sha256sum sigstore_shell_ext.dll sigstore-shell-cli.exe sigstore-shell-cli "$zip_name" > SHA256SUMS
+sha256sum sigstore_shell_ext.dll sigstore-shell-cli.exe sigstore-shell-cli "$zip_name" "sigstore-shell-Setup-$version.exe" > SHA256SUMS

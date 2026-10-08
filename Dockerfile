@@ -6,7 +6,7 @@ ENV CARGO_HOME=/cargo \
 
 # The posix thread model is what Rust's windows-gnu std expects.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip \
+    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip nsis \
     && rm -rf /var/lib/apt/lists/* \
     && update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix \
     && rustup target add x86_64-pc-windows-gnu \
@@ -20,8 +20,10 @@ WORKDIR /app
 # Debian 13 (trixie) for Wine 10: Wine 8 in bookworm lacks bcryptprimitives.dll, which Rust's std imports.
 FROM debian:trixie-slim AS wine
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends wine wine64 xvfb xauth ca-certificates \
+# wine32 so 32-bit programs run: NSIS installers are 32-bit.
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 ENV WINEPREFIX=/wine/prefix \

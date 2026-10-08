@@ -51,9 +51,10 @@ The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs n
 
 ### Download and verify a release
 
-Releases are built by GitHub Actions from this repo and attested with `actions/attest-build-provenance`. The DLL and the Windows CLI carry `ProvenanceRepo = non7top/sigstore-shell` in their version resource, and the Linux CLI carries it as an ELF note, so each can verify itself (`sigstore-shell-cli verify sigstore-shell-cli`). Each release has:
+Releases are built by GitHub Actions from this repo and attested with `actions/attest-build-provenance`. The installer, the DLL and the Windows CLI carry `ProvenanceRepo = non7top/sigstore-shell` in their version resource, and the Linux CLI carries it as an ELF note, so each can verify itself (`sigstore-shell-cli verify sigstore-shell-cli`). Each release has:
 
-- `sigstore-shell-ext-<version>-windows-x64.zip`: the DLL, `register.ps1`, `unregister.ps1`, the Inno Setup script and install notes
+- `sigstore-shell-ext-<version>-windows-x64.zip`: the DLL, `register.ps1`, `unregister.ps1`, and install notes
+- `sigstore-shell-Setup-<version>.exe`: installer (admin, Add/Remove Programs entry, registers the tab)
 - `sigstore_shell_ext.dll`, `sigstore-shell-cli.exe` (Windows), `sigstore-shell-cli` (Linux x86-64)
 - `SHA256SUMS`
 - a `.cosign.bundle` next to each file above (keyless cosign signature)
@@ -81,7 +82,7 @@ copy installer\register.ps1, installer\unregister.ps1 "C:\Program Files\sigstore
 
 Then open the Properties of an `.exe` and look for the Sigstore tab. To remove it run `unregister.ps1`; Explorer keeps the DLL loaded until it restarts, so restart Explorer (or sign out) before deleting the file.
 
-`register.ps1` calls `regsvr32`, which writes, under `HKLM\Software\Classes`, the CLSID with its `InprocServer32` and the handler key `exefile\shellex\PropertySheetHandlers\SigstoreShell`, and adds the CLSID to `HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved`. `installer/sigstore-shell.iss` is an Inno Setup script doing the same; it is not built here because Inno Setup runs only on Windows.
+`register.ps1` calls `regsvr32`, which writes, under `HKLM\Software\Classes`, the CLSID with its `InprocServer32` and the handler key `exefile\shellex\PropertySheetHandlers\SigstoreShell`, and adds the CLSID to `HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved`. `installer/sigstore-shell.nsi` writes the same keys with NSIS registry instructions, so the installer never has to load the DLL; a unit test in `registration.rs` checks the script still names the same CLSID and handler key. `make installer` builds it with plain `makensis` on Linux, no Wine, because the uninstaller is only written, not run. Each release also ships `sigstore-shell-Setup-<version>.exe`, carrying the same `ProvenanceRepo` claim as the DLL.
 
 ### Signing
 

@@ -125,6 +125,9 @@ jobs:
       - name: Build the Linux CLI
         run: make build
 
+      - name: Build the installer
+        run: make installer VERSION=${{ steps.vars.outputs.version }}
+
       - name: Package
         run: make package VERSION=${{ steps.vars.outputs.version }}
 
@@ -147,6 +150,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: dist/sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip
+          retention-days: 14
+          archive: false
+
+      - name: Upload the installer
+        id: upload-installer
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/sigstore-shell-Setup-${{ steps.vars.outputs.version }}.exe
           retention-days: 14
           archive: false
 
@@ -173,6 +184,7 @@ jobs:
         run: |
           gh pr comment "${{ github.event.pull_request.number }}" --body "Build ready for \`${{ steps.vars.outputs.sha_short }}\`:
           - [sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip](${{ steps.upload.outputs.artifact-url }}) (DLL and install scripts)
+          - [sigstore-shell-Setup-${{ steps.vars.outputs.version }}.exe](${{ steps.upload-installer.outputs.artifact-url }}) (installer, unsigned)
           - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})
           - [sigstore-shell-cli](${{ steps.upload-cli-linux.outputs.artifact-url }}) (Linux)"
 
