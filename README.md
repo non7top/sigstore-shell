@@ -1,6 +1,6 @@
 # sigstore-shell
 
-**Problem.** Releases are usually signed, and Windows will tell you who signed them: a company or a person. It does not tell you how the file was built or from which source code. That was always outside what a signature covers. Meanwhile the usual way to get software in 2026 is to download a binary from GitHub and run it, with the open repo as the only verification on offer, and detached GPG signatures, once common for this, have mostly gone.
+**Problem.** A signature on a Windows release names whoever holds the certificate, a company or a person. That tells you little today: a name says nothing about how the file was built or from which source code, and that was never what a signature covered. Meanwhile the usual way to get software in 2026 is to download a binary from GitHub and run it, with the open repo as the only verification on offer, and detached GPG signatures, once common for this, have mostly gone.
 
 Sigstore provenance fills that gap: a signed, public record of which repo, workflow and commit built this exact file, which anyone can check against the source. As Let's Encrypt did for certificates, free and automatic issuance can change what people expect from a release. Provenance does not say the code is safe, only where the file came from.
 
