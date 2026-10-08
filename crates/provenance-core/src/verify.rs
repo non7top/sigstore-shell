@@ -1,6 +1,6 @@
+use crate::claim::read_claim_file;
 use crate::github::valid_repo;
 use crate::identity::Identity;
-use crate::pe::read_claim_file;
 use crate::provider::{Provider, ProviderError, RateLimit};
 use serde::{Deserialize, Serialize};
 use sigstore_verify::trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};

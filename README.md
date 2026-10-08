@@ -6,7 +6,7 @@ Status: early development. The command-line prototype and the Explorer extension
 
 ## How it works
 
-1. The publishing project writes `ProvenanceRepo = owner/repo` into the exe's version resource and attests the exe with `actions/attest-build-provenance`.
+1. The publishing project embeds `owner/repo` in the file (a `ProvenanceRepo` version-resource string in a PE, an ELF note in a Linux binary; format in [project.md](project.md#embedded-claim)) and attests the exe with `actions/attest-build-provenance`.
 2. The tab shows that string as an unverified claim. Pressing **Verify** hashes the file, fetches the attestation for that digest from GitHub, checks it against Sigstore's roots and shows the identity from the certificate.
 
 The embedded string is only a hint. The identity shown always comes from the certificate, and a mismatch is flagged. Nothing is hashed or sent over the network until you press Verify.
@@ -21,7 +21,7 @@ See [project.md](project.md) for the design, rejected alternatives and open ques
 make build                      # dist/sigstore-shell-cli (everything runs in containers)
 make lint test                  # clippy, rustfmt, unit tests
 
-sigstore-shell-cli verify app.exe                    # repo from the ProvenanceRepo version string
+sigstore-shell-cli verify app.exe                    # repo from the embedded claim (PE version string or ELF note)
 sigstore-shell-cli verify app.exe --repo owner/repo  # ask about a specific repo
 sigstore-shell-cli verify app.exe --rekor            # also search Rekor v1 by hash (sends the hash to a second service)
 sigstore-shell-cli verify app.exe --json
@@ -40,7 +40,7 @@ Outcomes and exit codes:
 | verification failed | 13 | An attestation was returned but did not verify |
 | not checked | 14 | No repo to ask about and `--rekor` not given |
 
-Code lives in `crates/provenance-core` (PE version-resource reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
+Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
 
 ## Explorer extension
 
@@ -64,7 +64,7 @@ The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs n
 
 ### Download and verify a release
 
-Releases are built by GitHub Actions from this repo and attested with `actions/attest-build-provenance`. The DLL and the Windows CLI carry `ProvenanceRepo = non7top/sigstore-shell` in their version resource, so the extension can verify itself. Each release has:
+Releases are built by GitHub Actions from this repo and attested with `actions/attest-build-provenance`. The DLL and the Windows CLI carry `ProvenanceRepo = non7top/sigstore-shell` in their version resource, and the Linux CLI carries it as an ELF note, so each can verify itself (`sigstore-shell-cli verify sigstore-shell-cli`). Each release has:
 
 - `sigstore-shell-ext-<version>-windows-x64.zip`: the DLL, `register.ps1`, `unregister.ps1`, the Inno Setup script and install notes
 - `sigstore_shell_ext.dll`, `sigstore-shell-cli.exe` (Windows), `sigstore-shell-cli` (Linux x86-64)

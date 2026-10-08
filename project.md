@@ -17,7 +17,7 @@ Tell where an exe came from by looking only at the file, with a lookup keyed by 
 
 ## Mechanism
 
-1. **At build time**, the publishing project writes its repo into the exe's version resource as a custom string, e.g. `ProvenanceRepo = owner/repo`. This happens before the file is hashed or attested.
+1. **At build time**, the publishing project writes its repo into the file as an embedded claim (see [Embedded claim](#embedded-claim)): a version-resource string in a PE, a note in an ELF. This happens before the file is hashed or attested.
 2. **At release time**, the project attests each exe with `actions/attest-build-provenance`. GitHub stores a Sigstore-signed provenance record keyed by the file's SHA-256 digest. Both the app exe and the installer need their own attestation; the inner exe has a different hash from the installer.
 3. **In Explorer**, the tab opens instantly and does no network or hashing. It reads `ProvenanceRepo` from the file (no network needed) and shows it labelled as an unverified claim. Pressing **Verify** then:
    1. hashes the file;
@@ -40,6 +40,17 @@ The embedded repo string is a hint only. Anyone can write any repo into an exe. 
 
 - A false repo in the string finds no attestation, so the tab says "no provenance".
 - A malicious file that points at its own repo and is really attested there shows that repo truthfully. The user sees who built it and decides.
+
+## Embedded claim
+
+The claim says which repo the publisher says built the file. This section is normative; the constants are in `crates/provenance-core/src/claim_format.rs`, which the build scripts share with the reader.
+
+- **Value:** `owner/repo`, matching `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` (exactly one `/`, both parts non-empty), UTF-8 without a terminating NUL. At most 256 bytes.
+- **Hint only:** the claim is never evidence. The identity always comes from the verified certificate; a claim that differs from it is a mismatch.
+- **Carrier PE:** a string named `ProvenanceRepo` in the `VS_VERSIONINFO` string table (any language). Written by the build from the `PROVENANCE_REPO` environment variable when it is set.
+- **Carrier ELF:** an `SHT_NOTE` section named `.note.provenance` (flags `SHF_ALLOC`, alignment 4) holding one note in the ELF note layout: `namesz`, `descsz` and `type` as 32-bit words in the file's byte order, then the name `ProvenanceRepo` plus a NUL (`namesz` = 15) padded with zeros to a multiple of 4, then the `desc`, then zero padding to a multiple of 4. Note `type` is `1`. `desc` is the value above, `descsz` is its exact length without NUL or padding. Written by the CLI's `build.rs` when `PROVENANCE_REPO` is set and the target is Linux; it survives `--gc-sections` and `strip`.
+- **No claim:** with `PROVENANCE_REPO` unset (local and PR builds) nothing is embedded.
+- **Readers** pick the carrier by magic: `MZ` is PE, `\x7fELF` is ELF, anything else has no claim. A reader must never panic or read out of bounds on hostile input. A PE or ELF whose headers cannot be parsed is an error (shown as unreadable, not as "no claim"). A parseable file without the claim, a note of another name or type, a `desc` longer than 256 bytes, a `desc` that is not UTF-8, or an empty value yields no claim. ELF readers scan every `SHT_NOTE` section, not only by section name, and use the first note that yields a value. Consumers must still validate the value as `owner/repo` before using it (the CLI and the extension do, and ignore an invalid one with a note).
 
 ## Tab behaviour
 
