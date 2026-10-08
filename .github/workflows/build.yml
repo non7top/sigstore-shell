@@ -14,11 +14,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # Debug-profile work (clippy, tests) and the release-profile package build share no compiled
+  # artifacts, so they run as separate jobs, each with its own cache.
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Host directories instead of the compose named volumes, so actions/cache can carry them between runs.
+      - name: Point the cargo caches at host directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/cargo-target"
+          echo "CARGO_CACHE=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "TARGET_CACHE=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
+
+      - name: Restore the cargo caches
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-check-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
+          restore-keys: cargo-check-
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      # Only master saves: PR-scoped caches are unreadable by other PRs and would evict it.
+      - name: Save the cargo caches
+        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-check-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
+
+  package:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
+      # The cosign dry run below mints a Fulcio cert through OIDC.
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -28,11 +72,21 @@ jobs:
         id: checked_out
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Lint
-        run: make lint
+      - name: Point the cargo caches at host directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/cargo-target"
+          echo "CARGO_CACHE=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "TARGET_CACHE=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
 
-      - name: Test
-        run: make test
+      - name: Restore the cargo caches
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-release-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
+          restore-keys: cargo-release-
 
       - name: Predict next version
         id: predict
@@ -74,6 +128,20 @@ jobs:
       - name: Package
         run: make package VERSION=${{ steps.vars.outputs.version }}
 
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      # Proves the keyless sign/verify invocation in release.yml works before a real release runs it.
+      # Dependabot runs get no OIDC token.
+      - name: Cosign sign/verify dry run
+        if: github.actor != 'dependabot[bot]'
+        run: |
+          cosign sign-blob --yes --bundle dist/sigstore-shell-cli.cosign.bundle dist/sigstore-shell-cli
+          cosign verify-blob --bundle dist/sigstore-shell-cli.cosign.bundle \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            dist/sigstore-shell-cli
+          rm dist/sigstore-shell-cli.cosign.bundle
+
       - name: Upload the extension package
         id: upload
         uses: actions/upload-artifact@v7
@@ -90,11 +158,29 @@ jobs:
           retention-days: 14
           archive: false
 
+      - name: Upload the Linux CLI
+        id: upload-cli-linux
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/sigstore-shell-cli
+          retention-days: 14
+          archive: false
+
       - name: Comment download links on PR
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "Windows build ready for \`${{ steps.vars.outputs.sha_short }}\`:
+          gh pr comment "${{ github.event.pull_request.number }}" --body "Build ready for \`${{ steps.vars.outputs.sha_short }}\`:
           - [sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip](${{ steps.upload.outputs.artifact-url }}) (DLL and install scripts)
-          - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})"
+          - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})
+          - [sigstore-shell-cli](${{ steps.upload-cli-linux.outputs.artifact-url }}) (Linux)"
+
+      - name: Save the cargo caches
+        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/cargo
+            ${{ runner.temp }}/cargo-target
+          key: cargo-release-${{ hashFiles('Cargo.lock', 'Dockerfile') }}

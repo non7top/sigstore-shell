@@ -12,8 +12,8 @@ services:
       - RELEASE_VERSION
     volumes:
       - .:/app
-      - cargo:/cargo
-      - target:/cargo-target
+      - ${CARGO_CACHE:-cargo}:/cargo
+      - ${TARGET_CACHE:-target}:/cargo-target
 
   wine:
     build:
@@ -23,7 +23,7 @@ services:
     working_dir: /app
     volumes:
       - .:/app
-      - target:/cargo-target:ro
+      - ${TARGET_CACHE:-target}:/cargo-target:ro
       - wineprefix:/wine
 
 volumes:
