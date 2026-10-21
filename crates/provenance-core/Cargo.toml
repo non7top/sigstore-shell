@@ -21,7 +21,7 @@ serde_json = "1"
 snap = "1"
 sha2 = "0.11"
 sigstore-verify = { version = "0.14", features = ["tuf"] }
-sigstore-rekor = "0.14"
+sigstore-rekor = "0.15"
 thiserror = "2"
 
 [dev-dependencies]
