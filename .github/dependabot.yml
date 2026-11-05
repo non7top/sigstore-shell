@@ -7,6 +7,10 @@ updates:
     commit-message:
       prefix: "chore"
       prefix-development: "chore"
+    groups:
+      cargo:
+        patterns:
+          - "*"
     # windows-core must stay on the same release as the windows crate (its #[implement] macro breaks otherwise).
     ignore:
       - dependency-name: "windows-core"
@@ -18,6 +22,10 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -25,3 +33,7 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+    groups:
+      docker:
+        patterns:
+          - "*"
