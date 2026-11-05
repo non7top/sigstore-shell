@@ -11,8 +11,11 @@ make lint test                  # clippy, rustfmt, unit tests
 sigstore-shell-cli verify app.exe                    # repo from the embedded claim (PE version string or ELF note)
 sigstore-shell-cli verify app.exe --repo owner/repo  # ask about a specific repo
 sigstore-shell-cli verify app.exe --rekor            # also search Rekor v1 by hash (sends the hash to a second service)
+sigstore-shell-cli verify app.exe --bundle app.exe.cosign.bundle  # verify a bundle file in hand, no GitHub lookup
 sigstore-shell-cli verify app.exe --json
 ```
+
+Without `--bundle`, an `app.exe.sigstore` or `app.exe.cosign.bundle` next to the file is tried after the GitHub lookup. A bundle file is a candidate like any other: it must verify for the file's SHA-256 against the public Sigstore root, so a bundle for other bytes gives "verification failed", and the identity still comes only from the certificate. Both bundle kinds work: `cosign sign-blob` (message signature) and attestations (DSSE).
 
 `GH_TOKEN` or `GITHUB_TOKEN` is used for the GitHub API if set; without one the unauthenticated limit (60 requests per hour per IP) applies. The report prints the rate-limit headers.
 
@@ -25,7 +28,7 @@ Outcomes and exit codes:
 | mismatch | 11 | Verified, but the certificate's repo differs from the embedded claim or `--repo` |
 | lookup failed | 12 | Offline, rate-limited or an error; says nothing about whether an attestation exists |
 | verification failed | 13 | An attestation was returned but did not verify |
-| not checked | 14 | No repo to ask about and `--rekor` not given |
+| not checked | 14 | No repo to ask about and neither `--bundle` nor `--rekor` given |
 
 Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
 
