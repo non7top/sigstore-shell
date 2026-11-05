@@ -7,7 +7,14 @@
       "include-component-in-tag": false,
       "extra-label": "RELEASE",
       "bump-minor-pre-major": true,
-      "initial-version": "0.1.0"
+      "initial-version": "0.1.0",
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "perf", "section": "Performance Improvements" },
+        { "type": "revert", "section": "Reverts" },
+        { "type": "deps", "section": "Dependencies" }
+      ]
     }
   }
 }
