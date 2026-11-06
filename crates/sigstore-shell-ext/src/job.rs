@@ -1,8 +1,8 @@
 use crate::cache::Cache;
 use crate::model::{format_epoch, Phase, CACHED_NOTE};
 use provenance_core::{
-    sha256_file_with, verify_digest, verify_digest_keeping_bundle, Options, Provider, Report,
-    Status, StoredBundle, TrustRootSource, TrustedRoot,
+    sha256_file_with, verify_digest, verify_digest_keeping_bundle, BundleFile, GithubProvider,
+    Options, Provider, RekorProvider, Report, Status, StoredBundle, TrustRootSource, TrustedRoot,
 };
 use std::future::Future;
 use std::path::Path;
@@ -27,6 +27,22 @@ pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// A bundle the user chose is the whole lookup: nothing is sent to GitHub or Rekor. Otherwise the
+/// bundle file beside the file, if there is one, is tried after the GitHub lookup.
+pub fn providers_for(path: &Path, bundle: Option<&Path>, rekor: bool) -> Vec<Box<dyn Provider>> {
+    if let Some(bundle) = bundle {
+        return vec![Box::new(BundleFile::new(bundle))];
+    }
+    let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(GithubProvider::new(None))];
+    if let Some(sidecar) = BundleFile::beside(path) {
+        providers.push(Box::new(sidecar));
+    }
+    if rekor {
+        providers.push(Box::new(RekorProvider::default()));
+    }
+    providers
 }
 
 async fn cancelled(flag: &AtomicBool) {
@@ -164,6 +180,9 @@ where
 /// cannot be written only costs a repeat lookup.
 fn remember(cache: &Cache, report: &Report, bundle: Option<&provenance_core::Bundle>) {
     match (report.status, bundle) {
+        // A bundle file stays on disk where the user keeps it; the cache is for downloaded ones.
+        (Status::Verified | Status::Mismatch, _)
+            if report.provider.as_deref() == Some("bundle-file") => {}
         (Status::Verified | Status::Mismatch, Some(bundle)) => {
             let _ = cache.put(
                 &report.file_sha256,
@@ -672,6 +691,50 @@ mod tests {
         };
         let r = rt().block_on(run(&input, None, &providers, root, &cancel, &progress));
         assert_eq!(r.unwrap_err(), JobError::Cancelled);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn names(providers: &[Box<dyn Provider>]) -> Vec<&'static str> {
+        providers.iter().map(|p| p.name()).collect()
+    }
+
+    #[test]
+    fn a_chosen_bundle_is_the_only_provider_and_a_sidecar_follows_github() {
+        let dir = tmp("providers");
+        let file = dir.join("app.exe");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(names(&providers_for(&file, None, false)), ["github"]);
+        assert_eq!(
+            names(&providers_for(&file, None, true)),
+            ["github", "rekor-v1"]
+        );
+
+        std::fs::write(dir.join("app.exe.sigstore"), "{}").unwrap();
+        assert_eq!(
+            names(&providers_for(&file, None, true)),
+            ["github", "bundle-file", "rekor-v1"]
+        );
+
+        let chosen = dir.join("other.bundle");
+        assert_eq!(
+            names(&providers_for(&file, Some(&chosen), true)),
+            ["bundle-file"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_file_result_is_shown_but_not_cached() {
+        let dir = tmp("bundlefile");
+        let bundle = dir.join("app.sigstore");
+        std::fs::write(&bundle, BUNDLE).unwrap();
+        let cache = Cache::new(dir.join("cache"));
+        let providers = providers_for(&dir.join("app.exe"), Some(&bundle), false);
+
+        let r = resolve_with(SHA, None, true, &cache, &providers, root);
+        assert_eq!(r.status, Status::Verified);
+        assert_eq!(r.provider.as_deref(), Some("bundle-file"));
+        assert!(!entry_file(&dir.join("cache"), SHA).exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -316,6 +316,7 @@ pub fn provider_label(name: &str) -> &str {
     match name {
         "github" => "GitHub attestations (api.github.com)",
         "rekor-v1" => "Rekor v1 public log (rekor.sigstore.dev)",
+        "bundle-file" => "Bundle file on this PC",
         other => other,
     }
 }
@@ -364,6 +365,9 @@ fn consent(rekor: bool) -> String {
             " Rekor search is enabled in settings.json, so the hash also goes to rekor.sigstore.dev.",
         );
     }
+    s.push_str(
+        " \"Bundle file...\" checks a bundle on this PC instead and sends the hash nowhere.",
+    );
     s
 }
 
@@ -565,7 +569,7 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
     match state {
         State::Idle if !can_search => {
             v.headline = "Nothing to look up: this file names no repository and Rekor search \
-                is off."
+                is off. Choose a bundle file to verify it."
                 .into();
             v.show_consent = false;
         }

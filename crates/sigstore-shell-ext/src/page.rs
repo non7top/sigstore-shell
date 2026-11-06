@@ -1,10 +1,10 @@
 use crate::cache::Cache;
 use crate::dlgtemplate::{
     build, CACHE_RECT, CONTENT_WIDTH, FOOTER_RECT, ICON_FAILED, ICON_NEUTRAL, ICON_SLOT,
-    ICON_VERIFIED, ICON_WARNING, IDC_CACHE, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA, IDC_COPY_SIGNER,
-    IDC_DETAILS, IDC_EXPLAIN, IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON, IDC_LINKS, IDC_LINKS2,
-    IDC_PROGRESS, IDC_PROGRESS_TEXT, IDC_RATE, IDC_REPO, IDC_REPO_NOTE, IDC_REPO_SUFFIX,
-    IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW, REPO_WIDTH, VERDICT_ROW,
+    ICON_VERIFIED, ICON_WARNING, IDC_BUNDLE, IDC_CACHE, IDC_CANCEL, IDC_CONSENT, IDC_COPY_SHA,
+    IDC_COPY_SIGNER, IDC_DETAILS, IDC_EXPLAIN, IDC_FOOTER, IDC_GLYPH, IDC_HEADLINE, IDC_ICON,
+    IDC_LINKS, IDC_LINKS2, IDC_PROGRESS, IDC_PROGRESS_TEXT, IDC_RATE, IDC_REPO, IDC_REPO_NOTE,
+    IDC_REPO_SUFFIX, IDC_VERIFY, LINKS_RECT, MARGIN, REPO_ROW, REPO_WIDTH, VERDICT_ROW,
 };
 use crate::dll::{guard_value, module, Live};
 use crate::links::{
@@ -13,9 +13,10 @@ use crate::links::{
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
-use provenance_core::read_claim_file;
+use provenance_core::{read_claim_file, BundleFile};
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use windows::core::{w, Result, PCWSTR, PWSTR};
@@ -36,6 +37,10 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows::Win32::UI::Controls::Dialogs::{
+    GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
+    OPENFILENAMEW,
+};
 use windows::Win32::UI::Controls::{
     CreatePropertySheetPageW, DrawThemeParentBackground, DRAWITEMSTRUCT, HPROPSHEETPAGE, NMHDR,
     NMLINK, NM_CLICK, NM_RETURN, PBM_SETMARQUEE, PROPSHEETPAGEW, PROPSHEETPAGEW_0, PSPCB_MESSAGE,
@@ -659,6 +664,8 @@ unsafe fn layout(
     for id in [IDC_LINKS, IDC_LINKS2].into_iter().take(link_rows) {
         stack.put(hwnd, id, du(hwnd, 0, 0, 0, 10).bottom);
     }
+    // Shares the Copy buttons' row when there is one, else sits where that row would be.
+    let mut bundle_y = du(hwnd, 0, 165, 0, 0).top;
     if details_shown {
         let rate_h = du(hwnd, 0, 0, 0, 9).bottom;
         let cache_h = match &v.cache_line {
@@ -691,10 +698,20 @@ unsafe fn layout(
             sig_w,
             buttons,
         );
+        bundle_y = stack.y;
         stack.y += buttons + gap;
         place(hwnd, IDC_RATE, left, stack.y, full_w, rate_h);
         place(hwnd, IDC_CACHE, left, stack.y, full_w, cache_h);
     }
+    let bundle = du(hwnd, 165, 0, 80, 14);
+    place(
+        hwnd,
+        IDC_BUNDLE,
+        bundle.left,
+        bundle_y,
+        bundle.right - bundle.left,
+        du(hwnd, 0, 0, 0, 14).bottom,
+    );
 }
 
 /// Changes whenever the layout may have moved, so stale pixels get erased.
@@ -810,6 +827,7 @@ unsafe fn render(hwnd: HWND, data: &PageData) {
         );
     }
     set_enabled(hwnd, IDC_VERIFY, v.can_verify);
+    set_enabled(hwnd, IDC_BUNDLE, !v.running);
     let focus = if v.running { IDC_CANCEL } else { IDC_VERIFY };
     if v.running || v.can_verify {
         if let Ok(item) = GetDlgItem(Some(hwnd), i32::from(focus)) {
@@ -971,9 +989,62 @@ unsafe fn themed_static(ctl: HWND, hdc: HDC, color: Option<COLORREF>) -> isize {
 
 /// `refresh` skips the cache so GitHub is asked now.
 unsafe fn on_verify(hwnd: HWND, data: &PageData, refresh: bool) {
+    {
+        let ui = data.ui.borrow();
+        if ui.claim.repo().is_none() && !ui.rekor {
+            return;
+        }
+    }
+    start(hwnd, data, refresh, None);
+}
+
+fn wide(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+/// The bundle file beside the file if there is one, else one the user picks; `None` if they cancel.
+unsafe fn choose_bundle(hwnd: HWND, file: &Path) -> Option<PathBuf> {
+    if let Some(beside) = BundleFile::beside(file) {
+        return Some(beside.path().to_path_buf());
+    }
+    let filter: Vec<u16> = "Sigstore bundles\0*.sigstore;*.bundle;*.json\0All files\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let dir = file.parent().map(wide);
+    let mut name = vec![0u16; 4096];
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: hwnd,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(name.as_mut_ptr()),
+        nMaxFile: name.len() as u32,
+        lpstrInitialDir: dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+        lpstrTitle: w!("Choose the Sigstore bundle for this file"),
+        // Explorer's own working directory must not move under it.
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    if !GetOpenFileNameW(&mut dialog).as_bool() {
+        return None;
+    }
+    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&name[..len])))
+}
+
+unsafe fn on_bundle(hwnd: HWND, data: &PageData) {
+    if data.ui.borrow().state.is_running() {
+        return;
+    }
+    if let Some(bundle) = choose_bundle(hwnd, &data.path) {
+        start(hwnd, data, true, Some(bundle));
+    }
+}
+
+/// `bundle` replaces the GitHub lookup with that file.
+unsafe fn start(hwnd: HWND, data: &PageData, refresh: bool, bundle: Option<PathBuf>) {
     let ctx = {
         let mut ui = data.ui.borrow_mut();
-        if ui.state.is_running() || (ui.claim.repo().is_none() && !ui.rekor) {
+        if ui.state.is_running() {
             return;
         }
         let job = data.next_job.fetch_add(1, Ordering::Relaxed) + 1;
@@ -984,6 +1055,7 @@ unsafe fn on_verify(hwnd: HWND, data: &PageData, refresh: bool) {
             path: data.path.clone(),
             claimed_repo: ui.claim.repo().map(str::to_string),
             rekor: ui.rekor,
+            bundle,
             refresh,
             cancel: ui.cancel.clone(),
             mailbox: data.mailbox.clone(),
@@ -1055,6 +1127,7 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 if let (Some(data), BN_CLICKED) = (data_of(hwnd), code) {
                     match id {
                         IDC_VERIFY => on_verify(hwnd, data, false),
+                        IDC_BUNDLE => on_bundle(hwnd, data),
                         IDC_CANCEL => on_cancel(hwnd, data),
                         IDC_COPY_SHA | IDC_COPY_SIGNER => on_copy(hwnd, data, id),
                         _ => {}

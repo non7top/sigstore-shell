@@ -10,7 +10,7 @@ Tell where an exe came from by looking only at the file, with a lookup keyed by 
 
 ## Why not the obvious approaches
 
-- **Cosign bundles next to the file.** A `.cosign.bundle` is a detached file. Explorer ignores it, and a downloaded exe does not come with it.
+- **Cosign bundles next to the file.** A `.cosign.bundle` is a detached file, and a downloaded exe does not come with it. It is not the default lookup, but the tab and CLI use one when it is beside the file, and the tab offers a file picker.
 - **Embedding the signature in the exe.** The signature covers the exe's hash, so adding bytes to the exe breaks it. `cosign verify-blob` can't handle a custom trailer format.
 - **Searching the public Sigstore log (Rekor) by hash.** Rekor v1 supports it (`/api/v1/index/retrieve`) and is in maintenance mode but stays the public default "for the foreseeable future". Rekor v2 removed search by hash, and the replacement is only a planned separate service. A design that depends on it will break as signers move to v2.
 - **Authenticode.** SmartScreen only trusts Authenticode. Sigstore's roots are not in the Windows trust store, and Fulcio certificates last about 20 minutes, so Sigstore can't replace Authenticode. They do different jobs: Authenticode makes Windows accept the file, Sigstore says which repo published it. (SignPath Foundation offers free Authenticode signing for open-source projects; that is separate work in each publishing project.)

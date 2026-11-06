@@ -2,9 +2,7 @@ use crate::cache::Cache;
 use crate::job::{self, JobError, JobInput};
 use crate::model::{Event, Phase};
 use crate::page::Mailbox;
-use provenance_core::{
-    load_trusted_root, load_trusted_root_offline, GithubProvider, Provider, RekorProvider,
-};
+use provenance_core::{load_trusted_root, load_trusted_root_offline};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -22,6 +20,8 @@ pub struct JobCtx {
     pub path: PathBuf,
     pub claimed_repo: Option<String>,
     pub rekor: bool,
+    /// A bundle file to verify against instead of asking GitHub.
+    pub bundle: Option<PathBuf>,
     /// Skip the cache and ask GitHub now.
     pub refresh: bool,
     pub cancel: Arc<AtomicBool>,
@@ -34,10 +34,7 @@ fn run_job(ctx: &JobCtx) {
             .enable_all()
             .build()
             .map_err(|e| JobError::Failed(format!("could not start the network runtime: {e}")))?;
-        let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(GithubProvider::new(None))];
-        if ctx.rekor {
-            providers.push(Box::new(RekorProvider::default()));
-        }
+        let providers = job::providers_for(&ctx.path, ctx.bundle.as_deref(), ctx.rekor);
         let cache = Cache::user();
         let last = AtomicU8::new(u8::MAX);
         let progress = |phase: Phase| {
