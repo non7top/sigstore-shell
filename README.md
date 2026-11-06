@@ -11,6 +11,10 @@ This project shows that record where you look at the file: the Properties dialog
 - Adds a **Provenance** tab to an exe's Properties in Explorer: an outcome icon, repo, short commit, links to the commit, workflow and build run, and the signing details, verified from the file's Sigstore attestation.
 - Ships the same check as a command line (`sigstore-shell-cli verify <file>`, Windows and Linux).
 
+![The Provenance tab in the Properties dialog of sigstore-shell-Setup-0.1.0.exe in Windows Explorer](docs/screenshots/2026-11-04_23-33_explorer.png)
+
+The tab in real Explorer, on the v0.1.0 installer (screenshot of 2026-11-04). The repo, commit and signing details shown come from the file's Sigstore certificate.
+
 Nothing is hashed or sent anywhere until you press **Verify** or run the CLI. Either one sends the file's SHA-256 to GitHub.
 
 ## How it works
