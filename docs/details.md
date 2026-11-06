@@ -11,8 +11,11 @@ make lint test                  # clippy, rustfmt, unit tests
 sigstore-shell-cli verify app.exe                    # repo from the embedded claim (PE version string or ELF note)
 sigstore-shell-cli verify app.exe --repo owner/repo  # ask about a specific repo
 sigstore-shell-cli verify app.exe --rekor            # also search Rekor v1 by hash (sends the hash to a second service)
+sigstore-shell-cli verify app.exe --bundle app.exe.cosign.bundle  # verify a bundle file in hand, no GitHub lookup
 sigstore-shell-cli verify app.exe --json
 ```
+
+Without `--bundle`, an `app.exe.sigstore` or `app.exe.cosign.bundle` next to the file is tried after the GitHub lookup. A bundle file is a candidate like any other: it must verify for the file's SHA-256 against the public Sigstore root, so a bundle for other bytes gives "verification failed", and the identity still comes only from the certificate. Both bundle kinds work: `cosign sign-blob` (message signature) and attestations (DSSE).
 
 `GH_TOKEN` or `GITHUB_TOKEN` is used for the GitHub API if set; without one the unauthenticated limit (60 requests per hour per IP) applies. The report prints the rate-limit headers.
 
@@ -25,7 +28,7 @@ Outcomes and exit codes:
 | mismatch | 11 | Verified, but the certificate's repo differs from the embedded claim or `--repo` |
 | lookup failed | 12 | Offline, rate-limited or an error; says nothing about whether an attestation exists |
 | verification failed | 13 | An attestation was returned but did not verify |
-| not checked | 14 | No repo to ask about and `--rekor` not given |
+| not checked | 14 | No repo to ask about and neither `--bundle` nor `--rekor` given |
 
 Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
 
@@ -35,6 +38,7 @@ A native 64-bit COM DLL (`crates/sigstore-shell-ext`, Rust) that adds a **Proven
 
 - Opening the tab reads `ProvenanceRepo` from the file and shows it as "claimed, not verified", or "no provenance information in this file". No hashing, no network.
 - **Verify** hashes the file, asks GitHub for the attestation and verifies it. It runs on a worker thread with a progress bar and a Cancel button. Pressing it is the consent to send the file's SHA-256 to `api.github.com` (and to download Sigstore's trust root). After a result the consent sentence goes away and the button reads **Verify again**.
+- **Bundle file...** is always shown. It verifies against the `FILE.sigstore` or `FILE.cosign.bundle` beside the file if there is one, and otherwise opens a file picker for a bundle you choose. It sends nothing to GitHub or Rekor (the trust root is still downloaded), and the result says it was answered by a bundle file. **Verify** also tries a bundle file beside the file, after the GitHub lookup. Results from a bundle file are not cached.
 - The tab opens with one muted line explaining the word "provenance" (where the file came from: which repo and which workflow published it), then the claimed repository in bold with **Verify** at the top right. The consent sentence sits under it until a result exists.
 - The button shows GitHub's request count (`Verify  52/60`) only after a lookup in that tab, taken from that response's headers. It is never stored, so a freshly opened tab says plain `Verify`; a cached answer leaves it unchanged. The count is per IP and shared with other tools; the button's tooltip says so. Under the result a muted line gives the reset time. For a result that came from the cache it reads `Cached result from <local time> · Check online · Clear cache` instead: **Check online** skips the cache, asks GitHub now (the counter updates) and replaces the cached bundle; **Clear cache** deletes this file's entry only and leaves the result on screen with a note that the cache was cleared. **Verify** itself stays cache-first.
 - After a result the repository shown is the one in the certificate (bold, red if it differs from the file's claim, with the claim named below it), with the outcome icon (green tick, red cross, grey dash for "no attestation", which does not mean unsafe, grey warning for a failed lookup) and the verdict. When GitHub's limit is nearly used up or used up, the verdict says so. The details box (owner, workflow, full commit, ref, signing time, signer, who answered, SHA-256) is monospace and wrapped at path separators, so it needs no sideways scrolling. With high contrast on, the icon is replaced by a text symbol in the system text colour.

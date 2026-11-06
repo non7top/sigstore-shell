@@ -3,6 +3,7 @@
 //! The identity in a [`Report`] always comes from the verified certificate; the repo
 //! embedded in the file is only a claim to compare against.
 
+mod bundle_file;
 mod claim;
 mod claim_format;
 mod elf;
@@ -13,6 +14,7 @@ mod provider;
 mod rekor;
 mod verify;
 
+pub use bundle_file::BundleFile;
 pub use claim::{read_claim, read_claim_file, ClaimError};
 pub use claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE, ELF_SECTION, PE_KEY};
 #[cfg(feature = "test-fixtures")]

@@ -25,6 +25,8 @@ pub const IDC_REPO_SUFFIX: u16 = 119;
 pub const IDC_LINKS2: u16 = 120;
 /// The cached-result line with its two actions, a SysLink created in code like the links.
 pub const IDC_CACHE: u16 = 121;
+/// Always shown: verifies against the bundle file beside the file, else one the user picks.
+pub const IDC_BUNDLE: u16 = 122;
 
 pub const MARGIN: i16 = 7;
 pub const CONTENT_WIDTH: i16 = 238;
@@ -119,6 +121,13 @@ fn items() -> Vec<Item> {
             IDC_CANCEL,
             WS_CHILD | WS_TABSTOP,
             (165, 13, 80, 14),
+        ),
+        item(
+            Class::Button,
+            "Bundle file...",
+            IDC_BUNDLE,
+            vis | WS_TABSTOP,
+            (165, 165, 80, 14),
         ),
         item(
             Class::Static,

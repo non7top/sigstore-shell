@@ -2,8 +2,8 @@ include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
 
 use clap::Parser;
 use provenance_core::{
-    load_trusted_root, verify_file, GithubProvider, Options, Provider, RekorProvider, Report,
-    Status,
+    load_trusted_root, verify_file, BundleFile, GithubProvider, Options, Provider, RekorProvider,
+    Report, Status,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,6 +20,9 @@ enum Cli {
         /// owner/repo to ask GitHub about (default: ProvenanceRepo in the file)
         #[arg(long)]
         repo: Option<String>,
+        /// Verify against this bundle file instead of asking GitHub (no network lookup)
+        #[arg(long)]
+        bundle: Option<PathBuf>,
         /// Also search the public Rekor v1 log by hash (sends the hash to a second service)
         #[arg(long)]
         rekor: bool,
@@ -46,7 +49,9 @@ fn print_text(report: &Report) {
         Status::Mismatch => "MISMATCH: certificate names a different repo than claimed",
         Status::LookupFailed => "LOOKUP FAILED (could not tell whether an attestation exists)",
         Status::VerificationFailed => "ATTESTATION DID NOT VERIFY",
-        Status::NotChecked => "NOT CHECKED (no repo to ask about; pass --repo or --rekor)",
+        Status::NotChecked => {
+            "NOT CHECKED (no repo to ask about; pass --repo, --bundle or --rekor)"
+        }
     };
     println!("{headline}");
     println!("sha256:  {}", report.file_sha256);
@@ -96,6 +101,7 @@ async fn run() -> Result<u8, String> {
     let Cli::Verify {
         file,
         repo,
+        bundle,
         rekor,
         json,
     } = Cli::parse();
@@ -103,7 +109,16 @@ async fn run() -> Result<u8, String> {
         .ok()
         .filter(|t| !t.is_empty())
         .or_else(|| std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()));
-    let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(GithubProvider::new(token))];
+    let mut providers: Vec<Box<dyn Provider>> = Vec::new();
+    match bundle {
+        Some(path) => providers.push(Box::new(BundleFile::new(path))),
+        None => {
+            providers.push(Box::new(GithubProvider::new(token)));
+            if let Some(sidecar) = BundleFile::beside(&file) {
+                providers.push(Box::new(sidecar));
+            }
+        }
+    }
     if rekor {
         providers.push(Box::new(RekorProvider::default()));
     }
