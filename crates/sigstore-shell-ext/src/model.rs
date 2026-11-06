@@ -365,9 +365,6 @@ fn consent(rekor: bool) -> String {
             " Rekor search is enabled in settings.json, so the hash also goes to rekor.sigstore.dev.",
         );
     }
-    s.push_str(
-        " \"Bundle file...\" checks a bundle on this PC instead and sends the hash nowhere.",
-    );
     s
 }
 
