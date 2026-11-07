@@ -2,8 +2,8 @@ include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
 
 use clap::Parser;
 use provenance_core::{
-    load_trusted_root, verify_file, BundleFile, GithubProvider, Options, Provider, RekorProvider,
-    Report, Status,
+    load_trusted_root, verdict_text, verify_file, BundleFile, GithubProvider, Options, Provider,
+    RekorProvider, Report, Status,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -43,14 +43,17 @@ fn exit_code(status: Status) -> u8 {
 }
 
 fn print_text(report: &Report) {
+    let verdict = verdict_text(report, None);
     let headline = match report.status {
-        Status::Verified => "VERIFIED",
-        Status::NoAttestation => "NO ATTESTATION FOUND (this does not mean the file is unsafe)",
-        Status::Mismatch => "MISMATCH: certificate names a different repo than claimed",
-        Status::LookupFailed => "LOOKUP FAILED (could not tell whether an attestation exists)",
-        Status::VerificationFailed => "ATTESTATION DID NOT VERIFY",
+        Status::Verified | Status::Mismatch | Status::NoAttestation => {
+            verdict.clone().unwrap_or_default()
+        }
+        Status::LookupFailed => {
+            "LOOKUP FAILED (could not tell whether an attestation exists)".to_string()
+        }
+        Status::VerificationFailed => "ATTESTATION DID NOT VERIFY".to_string(),
         Status::NotChecked => {
-            "NOT CHECKED (no repo to ask about; pass --repo, --bundle or --rekor)"
+            "NOT CHECKED (no repo to ask about; pass --repo, --bundle or --rekor)".to_string()
         }
     };
     println!("{headline}");
@@ -83,7 +86,11 @@ fn print_text(report: &Report) {
             }
         }
     }
-    for note in &report.notes {
+    for note in report
+        .notes
+        .iter()
+        .filter(|n| verdict.as_deref() != Some(n.as_str()))
+    {
         println!("note: {note}");
     }
     if let Some(r) = &report.rate_limit {

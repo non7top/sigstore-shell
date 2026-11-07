@@ -28,7 +28,7 @@ pub use rekor::RekorProvider;
 pub use sigstore_verify::trust_root::TrustedRoot;
 pub use sigstore_verify::types::Bundle;
 pub use verify::{
-    load_embedded_root, load_trusted_root, load_trusted_root_offline, verify_digest,
+    load_embedded_root, load_trusted_root, load_trusted_root_offline, verdict_text, verify_digest,
     verify_digest_keeping_bundle, verify_file, Options, Report, Status, TrustRootSource,
 };
 

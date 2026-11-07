@@ -46,7 +46,7 @@ Install the Explorer tab on Windows by running `sigstore-shell-Setup-<version>.e
 
 ## Status
 
-Early development. No release is published yet. The CLI is tested against real attested releases. The Explorer tab is built and smoke-tested under Wine but not yet run in real Explorer, and the DLL is not Authenticode-signed. Details: [docs/details.md](docs/details.md); design: [project.md](project.md).
+Early development. Releases are on the [releases page](https://github.com/non7top/sigstore-shell/releases). The CLI is tested against real attested releases. The Explorer tab is smoke-tested under Wine and has been run in real Explorer on Windows (screenshot above). The Windows version and display scaling of that run were not recorded, so Windows 10 and other scalings are untested. The DLL is not Authenticode-signed. Details: [docs/details.md](docs/details.md); design: [project.md](project.md).
 
 ## Publish a project that works with it
 

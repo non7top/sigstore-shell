@@ -1,7 +1,7 @@
 use crate::links::{
     attestation_url, commit_url, log_entry_url, run_url, short_commit, workflow_url, Link,
 };
-use provenance_core::{valid_repo, ClaimError, Identity, Report, Status};
+use provenance_core::{valid_repo, verdict_text, ClaimError, Identity, Report, Status};
 
 /// What the file says about itself. Never trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,27 +406,12 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
     let headline = match report.status {
         Status::Verified => {
             outcome = Outcome::Good;
-            "Verified: this file's Sigstore attestation checks out.".to_string()
+            verdict_text(report, claim.repo()).unwrap_or_default()
         }
-        Status::Mismatch => {
-            let actual = report
-                .identity
-                .as_ref()
-                .and_then(|i| i.repo.as_deref())
-                .unwrap_or("an unknown repository");
-            let claimed = claim
-                .repo()
-                .or(report.queried_repo.as_deref())
-                .unwrap_or("?");
-            format!(
-                "Mismatch: the file claims {claimed}, but its attestation was signed for {actual}."
-            )
-        }
+        Status::Mismatch => verdict_text(report, claim.repo()).unwrap_or_default(),
         Status::NoAttestation => {
             outcome = Outcome::Neutral;
-            "No attestation found for this file. \
-            This does not mean the file is unsafe; most files have none."
-                .to_string()
+            verdict_text(report, claim.repo()).unwrap_or_default()
         }
         Status::LookupFailed => {
             outcome = Outcome::Warn;
@@ -590,10 +575,15 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
             v.headline = d.headline;
             v.links = d.links;
             v.rows = d.rows;
+            let verdict = verdict_text(report, claim.repo());
             v.notes = report
                 .notes
                 .iter()
-                .filter(|n| !n.starts_with(CACHED_NOTE) && *n != CLEARED_NOTE)
+                .filter(|n| {
+                    !n.starts_with(CACHED_NOTE)
+                        && *n != CLEARED_NOTE
+                        && verdict.as_deref() != Some(n.as_str())
+                })
                 .cloned()
                 .collect();
             v.rate_line = rate_line(report, &env.tz);
@@ -633,6 +623,7 @@ mod tests {
             rate_limit: None,
             trust_root: TrustRootSource::Tuf,
             notes: vec![],
+            searched: vec!["github".into()],
         }
     }
 
@@ -740,7 +731,11 @@ mod tests {
         let s = State::Done(Box::new(verified()));
         let v = view(&Claim::Repo("cli/cli".into()), &s, false);
         assert_eq!(v.outcome, Outcome::Good);
-        assert!(v.headline.starts_with("Verified") && v.headline.contains("checks out"));
+        assert!(
+            v.headline.starts_with("Verified")
+                && v.headline.contains("unchanged since it was built")
+        );
+        assert!(v.headline.contains("built by cli/cli"));
         assert!(!v.headline.to_lowercase().contains("safe"));
         assert_eq!(v.repo, "cli/cli");
         assert_eq!(v.repo_tone, Tone::Normal);
@@ -975,10 +970,25 @@ mod tests {
     #[test]
     fn each_failure_status_has_its_own_wording() {
         let h = |s| view(&Claim::Absent, &State::Done(Box::new(report(s))), true).headline;
-        assert!(h(Status::NoAttestation).contains("not mean the file is unsafe"));
+        let none = h(Status::NoAttestation);
+        assert!(none.contains("not a sign the file is unsafe"));
+        assert!(none.contains("Searched GitHub for cli/cli"));
+        assert!(none.contains("bundle file"));
+        assert!(!none.contains("most files"));
         assert!(h(Status::LookupFailed).starts_with("Lookup failed"));
         assert!(h(Status::VerificationFailed).starts_with("Verification failed"));
         assert!(h(Status::NotChecked).contains("Nothing was looked up"));
+    }
+
+    #[test]
+    fn the_no_attestation_note_is_not_repeated_under_the_headline() {
+        let mut r = report(Status::NoAttestation);
+        r.notes = vec![
+            provenance_core::verdict_text(&r, None).unwrap(),
+            "github: something else".into(),
+        ];
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        assert_eq!(v.notes, ["github: something else"]);
     }
 
     #[test]

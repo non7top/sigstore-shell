@@ -38,7 +38,7 @@ Lookup is a swappable provider; the verifier that checks the certificate chain a
 
 The embedded repo string is a hint only. Anyone can write any repo into an exe. The extension must show the identity from the attestation's certificate, never from the embedded string, and must flag a mismatch between the two.
 
-- A false repo in the string finds no attestation, so the tab says "no provenance".
+- A false repo in the string finds no attestation, so the tab says no attestation was found.
 - A malicious file that points at its own repo and is really attested there shows that repo truthfully. The user sees who published it and decides.
 
 ## Embedded claim
@@ -93,7 +93,7 @@ The claim says which repo the publisher says published the file. This section is
 
 1. **Prototype (command line, done; see open question 1):** read `ProvenanceRepo` from an exe, hash it, query GitHub, verify, print the result. Test against a real attested promptloom release. This answers question 1.
 2. **Promptloom changes** (tracked in non7top/promptloom#151): embed the repo in the app exe and installer, attest both, document `gh attestation verify <file> --repo non7top/promptloom` in the README.
-3. **Shell extension (built, see README):** COM property-sheet DLL in `crates/sigstore-shell-ext`, with an on-disk cache and Rekor opt-in through `settings.json`. Exercised under Wine only; not yet run in real Explorer.
+3. **Shell extension (built, see README):** COM property-sheet DLL in `crates/sigstore-shell-ext`, with an on-disk cache and Rekor opt-in through `settings.json`. Exercised under Wine and once in real Explorer on Windows (screenshot in the README); the Windows version, build and scaling of that run were not recorded.
 4. **Installer and signing** for the extension itself.
 
 ## First user

@@ -56,6 +56,9 @@ pub struct Report {
     pub rate_limit: Option<RateLimit>,
     pub trust_root: TrustRootSource,
     pub notes: Vec<String>,
+    /// Providers that answered with no attestation, in the order asked.
+    #[serde(default)]
+    pub searched: Vec<String>,
 }
 
 pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), String> {
@@ -201,6 +204,7 @@ pub async fn verify_digest_keeping_bundle(
         rate_limit: None,
         trust_root: root_source,
         notes,
+        searched: Vec::new(),
     };
     let verifier = Verifier::new(root).map_err(|e| format!("trust root unusable: {e}"))?;
 
@@ -239,6 +243,7 @@ pub async fn verify_digest_keeping_bundle(
                 }
                 if fetched.bundles.is_empty() {
                     answered_empty = true;
+                    report.searched.push(provider.name().to_string());
                     continue;
                 }
                 let mut rejected = Vec::new();
@@ -295,7 +300,57 @@ pub async fn verify_digest_keeping_bundle(
     } else {
         Status::NotChecked
     };
+    if let Some(text) =
+        verdict_text(&report, None).filter(|_| report.status == Status::NoAttestation)
+    {
+        report.notes.push(text);
+    }
     Ok((report, None))
+}
+
+/// The headline for a verified, mismatched or empty result, shared by the CLI and the tab.
+/// A verified result says two things: the file's hash is the one attested (unchanged), and the
+/// certificate names the builder (came from there). `claimed` is the repo the file or the user named.
+pub fn verdict_text(report: &Report, claimed: Option<&str>) -> Option<String> {
+    let built_by = report
+        .identity
+        .as_ref()
+        .and_then(|i| i.repo.as_deref())
+        .unwrap_or("the signer shown below");
+    match report.status {
+        Status::Verified => Some(format!(
+            "Verified: this file is unchanged since it was built, and it was built by {built_by}."
+        )),
+        Status::Mismatch => {
+            let claimed = claimed.or(report.queried_repo.as_deref()).unwrap_or("?");
+            Some(format!(
+                "Mismatch: this file is unchanged since it was built, but it was built by {built_by}, not {claimed}."
+            ))
+        }
+        Status::NoAttestation => {
+            let places: Vec<String> = report
+                .searched
+                .iter()
+                .map(|name| match (name.as_str(), &report.queried_repo) {
+                    ("github", Some(repo)) => format!("GitHub for {repo}"),
+                    ("github", None) => "GitHub".to_string(),
+                    ("rekor-v1", _) => "the Rekor v1 log".to_string(),
+                    (other, _) => other.to_string(),
+                })
+                .collect();
+            let searched = if places.is_empty() {
+                "the places asked".to_string()
+            } else {
+                places.join(" and ")
+            };
+            Some(format!(
+                "No attestation found (this is not a sign the file is unsafe). Searched {searched}; \
+                 that cannot tell a file never attested from one changed since its build, or one \
+                 attested where the search did not look. A bundle file for this release settles it."
+            ))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -508,6 +563,66 @@ mod tests {
         let (_, offline) = load_trusted_root_offline().await.unwrap();
         assert_eq!(offline, TrustRootSource::Embedded);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn verified_says_unchanged_and_names_the_builder_from_the_certificate() {
+        let r = run(Mock::Bundle, DIGEST, Some("someone/else")).await;
+        let r = Report {
+            status: Status::Verified,
+            ..r
+        };
+        assert_eq!(
+            verdict_text(&r, None).unwrap(),
+            "Verified: this file is unchanged since it was built, and it was built by cli/cli."
+        );
+    }
+
+    #[tokio::test]
+    async fn mismatch_says_the_hash_matched_but_the_builder_is_not_the_claimed_repo() {
+        let r = run(Mock::Bundle, DIGEST, Some("evil/repo")).await;
+        assert_eq!(r.status, Status::Mismatch);
+        let text = verdict_text(&r, Some("evil/repo")).unwrap();
+        assert!(text.starts_with("Mismatch: this file is unchanged since it was built"));
+        assert!(text.contains("built by cli/cli, not evil/repo"));
+    }
+
+    #[tokio::test]
+    async fn no_attestation_names_where_it_looked_and_how_to_settle_it() {
+        let r = run(Mock::Empty, DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.searched, ["mock"]);
+        let text = verdict_text(&r, None).unwrap();
+        assert!(text.contains("Searched mock;"), "{text}");
+        assert!(text.contains("changed since its build"));
+        assert!(text.contains("bundle file"));
+        assert!(!text.contains("most files"));
+        assert!(r.notes.contains(&text));
+
+        let github = Report {
+            searched: vec!["github".into(), "rekor-v1".into()],
+            ..r
+        };
+        let text = verdict_text(&github, None).unwrap();
+        assert!(text.contains("Searched GitHub for cli/cli and the Rekor v1 log;"));
+    }
+
+    #[test]
+    fn other_statuses_have_no_shared_verdict_text() {
+        let r = Report {
+            status: Status::LookupFailed,
+            file_sha256: String::new(),
+            claimed_repo: None,
+            queried_repo: None,
+            provider: None,
+            identity: None,
+            attestation_id: None,
+            log_index: None,
+            rate_limit: None,
+            trust_root: TrustRootSource::Embedded,
+            notes: vec![],
+            searched: vec![],
+        };
+        assert!(verdict_text(&r, None).is_none());
     }
 
     #[tokio::test]
