@@ -20,6 +20,16 @@ pub fn release_version() -> Option<String> {
     env_nonempty("RELEASE_VERSION")
 }
 
+/// Where the release workflow publishes the cosign bundle of the release asset `asset`; None unless
+/// both PROVENANCE_REPO and RELEASE_VERSION are set, as in a release build.
+pub fn bundle_url(asset: &str) -> Option<String> {
+    let repo = env_nonempty("PROVENANCE_REPO")?;
+    let version = release_version()?;
+    Some(format!(
+        "https://github.com/{repo}/releases/download/v{version}/{asset}.cosign.bundle"
+    ))
+}
+
 /// RELEASE_COMMIT, else the checked-out commit, else "unknown" (a build without .git).
 pub fn commit() -> String {
     if let Some(commit) = env_nonempty("RELEASE_COMMIT") {

@@ -17,7 +17,7 @@ mod web_bundle;
 mod zone;
 
 pub use bundle_file::BundleFile;
-pub use claim::{read_claim, read_claim_file, ClaimError};
+pub use claim::{read_bundle_url, read_bundle_url_file, read_claim, read_claim_file, ClaimError};
 pub use claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE, ELF_SECTION, PE_KEY};
 #[cfg(feature = "test-fixtures")]
 pub use elf::fixture as elf_fixture;

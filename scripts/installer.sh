@@ -19,5 +19,6 @@ if [ -n "$commit" ]; then
 fi
 if [ -n "${PROVENANCE_REPO:-}" ]; then
     args+=("-DPROVENANCE_REPO=$PROVENANCE_REPO")
+    args+=("-DBUNDLE_URL=https://github.com/$PROVENANCE_REPO/releases/download/v$version/sigstore-shell-Setup-$version.exe.cosign.bundle")
 fi
 makensis "${args[@]}" installer/sigstore-shell.nsi

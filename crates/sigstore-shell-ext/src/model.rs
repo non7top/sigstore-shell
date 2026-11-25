@@ -210,6 +210,8 @@ pub struct Env {
     pub tz: jiff::tz::TimeZone,
     /// Where the browser says the file was downloaded from (`Zone.Identifier`), shown as unverified.
     pub downloaded_from: Option<String>,
+    /// The host the file's own bundle link points at, when the web-bundle setting is on and the link is usable.
+    pub web_host: Option<String>,
 }
 
 impl Env {
@@ -218,6 +220,7 @@ impl Env {
             rate,
             tz: jiff::tz::TimeZone::system(),
             downloaded_from: None,
+            web_host: None,
         }
     }
 }
@@ -228,6 +231,7 @@ impl Default for Env {
             rate: None,
             tz: jiff::tz::TimeZone::UTC,
             downloaded_from: None,
+            web_host: None,
         }
     }
 }
@@ -325,6 +329,7 @@ pub fn provider_label(name: &str) -> &str {
         "github" => "GitHub attestations (api.github.com)",
         "rekor-v1" => "Rekor v1 public log (rekor.sigstore.dev)",
         "bundle-file" => "Bundle file on this PC",
+        "web-bundle" => "Bundle downloaded from the link in the file",
         other => other,
     }
 }
@@ -363,7 +368,7 @@ fn claim_parts(claim: &Claim) -> (String, String) {
     }
 }
 
-fn consent(rekor: bool) -> String {
+fn consent(rekor: bool, web_host: Option<&str>) -> String {
     let mut s = String::from(
         "Pressing Verify hashes this file and sends its SHA-256 hash to GitHub \
          (api.github.com), and downloads Sigstore's public trust root.",
@@ -372,6 +377,11 @@ fn consent(rekor: bool) -> String {
         s.push_str(
             " Rekor search is enabled in settings.json, so the hash also goes to rekor.sigstore.dev.",
         );
+    }
+    if let Some(host) = web_host {
+        s.push_str(&format!(
+            " Web bundle is enabled in settings.json, so if those lookups do not verify the file, the bundle named in the file is downloaded from {host}, which sees that request.",
+        ));
     }
     s
 }
@@ -539,7 +549,7 @@ pub fn view(claim: &Claim, state: &State, rekor: bool) -> View {
 }
 
 pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
-    let can_search = claim.repo().is_some() || rekor;
+    let can_search = claim.repo().is_some() || rekor || env.web_host.is_some();
     let running = state.is_running();
     let (repo, repo_note) = claim_parts(claim);
     let mut v = View {
@@ -556,7 +566,7 @@ pub fn view_in(claim: &Claim, state: &State, rekor: bool, env: &Env) -> View {
         cache_line: None,
         sha256: None,
         signer: None,
-        consent: consent(rekor),
+        consent: consent(rekor, env.web_host.as_deref()),
         show_consent: true,
         verify_label: verify_label("Verify", env.rate),
         can_verify: can_search && !running,
@@ -730,6 +740,30 @@ mod tests {
         assert_eq!(plain.headline, hinted.headline);
         assert_eq!(plain.outcome, hinted.outcome);
         assert_eq!(plain.links, hinted.links);
+    }
+
+    #[test]
+    fn the_web_bundle_host_is_named_in_the_consent_text_only_when_enabled() {
+        let plain = view(&Claim::Repo("a/b".into()), &State::Idle, false);
+        assert!(!plain.consent.contains("Web bundle"));
+        let env = Env {
+            web_host: Some("github.com".into()),
+            ..Env::default()
+        };
+        let v = view_in(&Claim::Repo("a/b".into()), &State::Idle, false, &env);
+        assert!(v.consent.contains("Web bundle is enabled in settings.json"));
+        assert!(v.consent.contains("downloaded from github.com"));
+        assert!(v.consent.contains("api.github.com"));
+    }
+
+    #[test]
+    fn a_usable_bundle_link_makes_a_file_with_no_repo_verifiable() {
+        assert!(!view(&Claim::Absent, &State::Idle, false).can_verify);
+        let env = Env {
+            web_host: Some("github.com".into()),
+            ..Env::default()
+        };
+        assert!(view_in(&Claim::Absent, &State::Idle, false, &env).can_verify);
     }
 
     #[test]
@@ -1093,6 +1127,7 @@ mod tests {
                 rate: None,
                 tz,
                 downloaded_from: None,
+                web_host: None,
             };
             view_in(
                 &Claim::Absent,
@@ -1240,6 +1275,7 @@ mod tests {
             }),
             tz: jiff::tz::TimeZone::UTC,
             downloaded_from: None,
+            web_host: None,
         };
         let claim = Claim::Repo("cli/cli".into());
         assert_eq!(

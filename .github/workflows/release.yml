@@ -99,7 +99,7 @@ jobs:
               exit 1
             fi
           fi
-          python3 -I scripts/check-release.py "$RELEASE_VERSION" "$RELEASE_COMMIT" dist
+          python3 -I scripts/check-release.py "$RELEASE_VERSION" "$RELEASE_COMMIT" dist "$PROVENANCE_REPO"
 
       # Attestation is by digest, so nothing may rewrite these files after this step.
       - name: Attest build provenance

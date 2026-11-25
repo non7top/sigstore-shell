@@ -1,16 +1,16 @@
 use pelite::{pe32, pe64};
 
-use crate::claim_format::PE_KEY;
+use crate::claim_format::{PE_BUNDLE_KEY, PE_KEY};
 
 macro_rules! claim_from {
-    ($pe:ident, $image:expr) => {
+    ($pe:ident, $image:expr, $key:expr) => {
         (|| -> Result<Option<String>, String> {
             use $pe::Pe;
             let pe = $pe::PeFile::from_bytes($image).map_err(|e| e.to_string())?;
             let mut found = None;
             if let Some(info) = pe.resources().ok().and_then(|r| r.version_info().ok()) {
                 for lang in info.translation() {
-                    if let Some(value) = info.value(*lang, PE_KEY) {
+                    if let Some(value) = info.value(*lang, $key) {
                         let value = value.trim().to_string();
                         if !value.is_empty() {
                             found = Some(value);
@@ -24,10 +24,19 @@ macro_rules! claim_from {
     };
 }
 
+fn read_string(image: &[u8], key: &str) -> Result<Option<String>, String> {
+    claim_from!(pe64, image, key).or_else(|first| claim_from!(pe32, image, key).map_err(|_| first))
+}
+
 /// Reads the `ProvenanceRepo` version-resource string. Pure parsing, so it works off Windows.
 /// `Ok(None)` means a valid PE without that string.
 pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
-    claim_from!(pe64, image).or_else(|first| claim_from!(pe32, image).map_err(|_| first))
+    read_string(image, PE_KEY)
+}
+
+/// Reads the optional `ProvenanceBundle` string, with the same meaning of `Ok(None)`.
+pub fn read_bundle_url(image: &[u8]) -> Result<Option<String>, String> {
+    read_string(image, PE_BUNDLE_KEY)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]

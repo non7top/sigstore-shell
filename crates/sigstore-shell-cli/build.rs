@@ -6,7 +6,7 @@ mod claim_format;
 use std::path::PathBuf;
 
 /// The note bytes, laid out as in project.md ("Embedded claim"), in the target's byte order.
-fn note(repo: &str, big: bool) -> Vec<u8> {
+fn note(name: &str, value: &str, big: bool) -> Vec<u8> {
     let word = |n: usize| {
         let n = u32::try_from(n).expect("note field fits u32");
         if big {
@@ -17,13 +17,13 @@ fn note(repo: &str, big: bool) -> Vec<u8> {
     };
     let pad = |v: &mut Vec<u8>| v.resize(v.len().div_ceil(4) * 4, 0);
     let mut b = Vec::new();
-    b.extend(word(claim_format::ELF_NOTE_NAME.len() + 1));
-    b.extend(word(repo.len()));
+    b.extend(word(name.len() + 1));
+    b.extend(word(value.len()));
     b.extend(word(claim_format::ELF_NOTE_TYPE as usize));
-    b.extend(claim_format::ELF_NOTE_NAME.as_bytes());
+    b.extend(name.as_bytes());
     b.push(0);
     pad(&mut b);
-    b.extend(repo.as_bytes());
+    b.extend(value.as_bytes());
     pad(&mut b);
     b
 }
@@ -37,7 +37,10 @@ fn main() {
     if os == "linux" {
         if let Some(repo) = &repo {
             let big = std::env::var("CARGO_CFG_TARGET_ENDIAN").as_deref() == Ok("big");
-            let bytes = note(repo, big);
+            let mut bytes = note(claim_format::ELF_NOTE_NAME, repo, big);
+            if let Some(url) = build_id::bundle_url("sigstore-shell-cli") {
+                bytes.extend(note(claim_format::ELF_BUNDLE_NOTE_NAME, &url, big));
+            }
             src = format!(
                 "#[repr(C, align(4))]\nstruct Note([u8; {len}]);\n\
                  #[used]\n#[link_section = \"{section}\"]\nstatic PROVENANCE_NOTE: Note = Note({bytes:?});\n",
@@ -55,6 +58,9 @@ fn main() {
     // Only release builds set this, so a local build does not claim to come from the repo's workflow.
     if let Some(repo) = &repo {
         res.set(claim_format::PE_KEY, repo);
+    }
+    if let Some(url) = build_id::bundle_url("sigstore-shell-cli.exe") {
+        res.set(claim_format::PE_BUNDLE_KEY, &url);
     }
     // The crate version stays fixed: release-please cannot update Cargo.lock, and --locked builds need it to match.
     if let Some(version) = build_id::release_version() {

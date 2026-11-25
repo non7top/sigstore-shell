@@ -13,7 +13,7 @@ use crate::links::{
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
-use provenance_core::{read_claim_file, BundleFile};
+use provenance_core::{read_bundle_url_file, read_claim_file, BundleFile, WebBundle};
 use std::cell::{Cell, RefCell};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -109,6 +109,8 @@ struct Ui {
     rekor: bool,
     /// From the file's Zone.Identifier stream; shown as unverified, used for nothing else.
     downloaded_from: Option<String>,
+    /// The file's own bundle link and its host, kept only when the web-bundle setting is on and the link is https.
+    web_bundle: Option<(String, String)>,
     state: State,
     cancel: Arc<AtomicBool>,
     /// From the last fresh response in this tab only; nothing is stored.
@@ -122,6 +124,7 @@ impl Ui {
             rate: self.rate,
             tz: self.tz.clone(),
             downloaded_from: self.downloaded_from.clone(),
+            web_host: self.web_bundle.as_ref().map(|(_, host)| host.clone()),
         };
         view_in(&self.claim, &self.state, self.rekor, &env)
     }
@@ -160,6 +163,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
             claim: Claim::Absent,
             rekor: false,
             downloaded_from: None,
+            web_bundle: None,
             state: State::Idle,
             cancel: Arc::new(AtomicBool::new(false)),
             rate: None,
@@ -848,10 +852,16 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
     {
         let mut ui = data.ui.borrow_mut();
         ui.claim = Claim::from_read(read_claim_file(&data.path));
-        ui.rekor = app_dir()
-            .map(|d| Settings::load(&d))
-            .unwrap_or_default()
-            .rekor;
+        let settings = app_dir().map(|d| Settings::load(&d)).unwrap_or_default();
+        ui.rekor = settings.rekor;
+        ui.web_bundle = settings
+            .web_bundle
+            .then(|| read_bundle_url_file(&data.path).ok().flatten())
+            .flatten()
+            .and_then(|url| {
+                let host = WebBundle::new(&url).ok()?.host().to_string();
+                Some((url, host))
+            });
         ui.downloaded_from = crate::job::download_hint(&data.path);
         ui.tz = jiff::tz::TimeZone::system();
     }
@@ -996,7 +1006,7 @@ unsafe fn themed_static(ctl: HWND, hdc: HDC, color: Option<COLORREF>) -> isize {
 unsafe fn on_verify(hwnd: HWND, data: &PageData, refresh: bool) {
     {
         let ui = data.ui.borrow();
-        if ui.claim.repo().is_none() && !ui.rekor {
+        if ui.claim.repo().is_none() && !ui.rekor && ui.web_bundle.is_none() {
             return;
         }
     }
@@ -1060,6 +1070,7 @@ unsafe fn start(hwnd: HWND, data: &PageData, refresh: bool, bundle: Option<PathB
             path: data.path.clone(),
             claimed_repo: ui.claim.repo().map(str::to_string),
             rekor: ui.rekor,
+            web_bundle_url: ui.web_bundle.as_ref().map(|(url, _)| url.clone()),
             bundle,
             refresh,
             cancel: ui.cancel.clone(),

@@ -2,8 +2,8 @@ include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
 
 use clap::Parser;
 use provenance_core::{
-    load_trusted_root, verdict_text, verify_file, BundleFile, GithubProvider, Options, Provider,
-    RekorProvider, Report, Status, WebBundle,
+    load_trusted_root, read_bundle_url_file, verdict_text, verify_file, BundleFile, GithubProvider,
+    Options, Provider, RekorProvider, Report, Status, WebBundle,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,6 +26,9 @@ enum Cli {
         /// Verify against a bundle downloaded from this https URL instead of asking GitHub (sends a request to that host)
         #[arg(long)]
         bundle_url: Option<String>,
+        /// Also download the bundle that the file itself names (its embedded link), after the other lookups (sends a request to that host)
+        #[arg(long)]
+        web_bundle: bool,
         /// Also search the public Rekor v1 log by hash (sends the hash to a second service)
         #[arg(long)]
         rekor: bool,
@@ -56,7 +59,7 @@ fn print_text(report: &Report) {
         }
         Status::VerificationFailed => "ATTESTATION DID NOT VERIFY".to_string(),
         Status::NotChecked => {
-            "NOT CHECKED (no repo to ask about; pass --repo, --bundle, --bundle-url or --rekor)"
+            "NOT CHECKED (no repo to ask about; pass --repo, --bundle, --bundle-url, --web-bundle or --rekor)"
                 .to_string()
         }
     };
@@ -114,6 +117,7 @@ async fn run() -> Result<u8, String> {
         repo,
         bundle,
         bundle_url,
+        web_bundle,
         rekor,
         json,
     } = Cli::parse();
@@ -135,6 +139,21 @@ async fn run() -> Result<u8, String> {
         providers.push(Box::new(GithubProvider::new(token)));
         if let Some(sidecar) = BundleFile::beside(&file) {
             providers.push(Box::new(sidecar));
+        }
+    }
+    if web_bundle {
+        match read_bundle_url_file(&file) {
+            Ok(Some(url)) => match WebBundle::new(&url) {
+                Ok(web) => {
+                    eprintln!(
+                        "note: --web-bundle downloads a bundle from {} only if the lookups before it do not verify the file",
+                        web.host()
+                    );
+                    providers.push(Box::new(web));
+                }
+                Err(e) => eprintln!("note: --web-bundle skipped, the file's link is unusable: {e}"),
+            },
+            _ => eprintln!("note: --web-bundle skipped, the file embeds no bundle link"),
         }
     }
     if rekor {

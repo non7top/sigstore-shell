@@ -20,6 +20,8 @@ pub struct JobCtx {
     pub path: PathBuf,
     pub claimed_repo: Option<String>,
     pub rekor: bool,
+    /// The bundle link embedded in the file, set only when the user turned the web bundle on.
+    pub web_bundle_url: Option<String>,
     /// A bundle file to verify against instead of asking GitHub.
     pub bundle: Option<PathBuf>,
     /// Skip the cache and ask GitHub now.
@@ -34,7 +36,12 @@ fn run_job(ctx: &JobCtx) {
             .enable_all()
             .build()
             .map_err(|e| JobError::Failed(format!("could not start the network runtime: {e}")))?;
-        let providers = job::providers_for(&ctx.path, ctx.bundle.as_deref(), ctx.rekor);
+        let providers = job::providers_for(
+            &ctx.path,
+            ctx.bundle.as_deref(),
+            ctx.rekor,
+            ctx.web_bundle_url.as_deref(),
+        );
         let cache = Cache::user();
         let last = AtomicU8::new(u8::MAX);
         let progress = |phase: Phase| {

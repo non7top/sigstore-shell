@@ -3,6 +3,7 @@ use crate::model::{format_epoch, Phase, CACHED_NOTE};
 use provenance_core::{
     sha256_file_with, verify_digest, verify_digest_keeping_bundle, BundleFile, GithubProvider,
     Options, Provider, RekorProvider, Report, Status, StoredBundle, TrustRootSource, TrustedRoot,
+    WebBundle,
 };
 use std::future::Future;
 use std::path::Path;
@@ -45,14 +46,23 @@ pub fn now_secs() -> u64 {
 }
 
 /// A bundle the user chose is the whole lookup: nothing is sent to GitHub or Rekor. Otherwise the
-/// bundle file beside the file, if there is one, is tried after the GitHub lookup.
-pub fn providers_for(path: &Path, bundle: Option<&Path>, rekor: bool) -> Vec<Box<dyn Provider>> {
+/// bundle file beside the file, if there is one, is tried after the GitHub lookup, then the bundle
+/// the file links to (`web_url`, only when the user turned that on), then Rekor.
+pub fn providers_for(
+    path: &Path,
+    bundle: Option<&Path>,
+    rekor: bool,
+    web_url: Option<&str>,
+) -> Vec<Box<dyn Provider>> {
     if let Some(bundle) = bundle {
         return vec![Box::new(BundleFile::new(bundle))];
     }
     let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(GithubProvider::new(None))];
     if let Some(sidecar) = BundleFile::beside(path) {
         providers.push(Box::new(sidecar));
+    }
+    if let Some(web) = web_url.and_then(|u| WebBundle::new(u).ok()) {
+        providers.push(Box::new(web));
     }
     if rekor {
         providers.push(Box::new(RekorProvider::default()));
@@ -195,9 +205,13 @@ where
 /// cannot be written only costs a repeat lookup.
 fn remember(cache: &Cache, report: &Report, bundle: Option<&provenance_core::Bundle>) {
     match (report.status, bundle) {
-        // A bundle file stays on disk where the user keeps it; the cache is for downloaded ones.
+        // A bundle file stays on disk where the user keeps it, and a web bundle is fetched from the
+        // address the file names on every check; the cache is for what GitHub and Rekor returned.
         (Status::Verified | Status::Mismatch, _)
-            if report.provider.as_deref() == Some("bundle-file") => {}
+            if matches!(
+                report.provider.as_deref(),
+                Some("bundle-file" | "web-bundle")
+            ) => {}
         (Status::Verified | Status::Mismatch, Some(bundle)) => {
             let _ = cache.put(
                 &report.file_sha256,
@@ -718,21 +732,37 @@ mod tests {
         let dir = tmp("providers");
         let file = dir.join("app.exe");
         std::fs::write(&file, b"x").unwrap();
-        assert_eq!(names(&providers_for(&file, None, false)), ["github"]);
+        assert_eq!(names(&providers_for(&file, None, false, None)), ["github"]);
         assert_eq!(
-            names(&providers_for(&file, None, true)),
+            names(&providers_for(&file, None, true, None)),
             ["github", "rekor-v1"]
         );
 
         std::fs::write(dir.join("app.exe.sigstore"), "{}").unwrap();
         assert_eq!(
-            names(&providers_for(&file, None, true)),
+            names(&providers_for(&file, None, true, None)),
             ["github", "bundle-file", "rekor-v1"]
+        );
+
+        let url = Some("https://example.org/app.exe.cosign.bundle");
+        assert_eq!(
+            names(&providers_for(&file, None, true, url)),
+            ["github", "bundle-file", "web-bundle", "rekor-v1"]
+        );
+        assert_eq!(
+            names(&providers_for(
+                &file,
+                None,
+                false,
+                Some("http://example.org/a")
+            )),
+            ["github", "bundle-file"],
+            "a link that is not https is not used"
         );
 
         let chosen = dir.join("other.bundle");
         assert_eq!(
-            names(&providers_for(&file, Some(&chosen), true)),
+            names(&providers_for(&file, Some(&chosen), true, url)),
             ["bundle-file"]
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -744,11 +774,37 @@ mod tests {
         let bundle = dir.join("app.sigstore");
         std::fs::write(&bundle, BUNDLE).unwrap();
         let cache = Cache::new(dir.join("cache"));
-        let providers = providers_for(&dir.join("app.exe"), Some(&bundle), false);
+        let providers = providers_for(&dir.join("app.exe"), Some(&bundle), false, None);
 
         let r = resolve_with(SHA, None, true, &cache, &providers, root);
         assert_eq!(r.status, Status::Verified);
         assert_eq!(r.provider.as_deref(), Some("bundle-file"));
+        assert!(!entry_file(&dir.join("cache"), SHA).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Answers like a web bundle without any network.
+    struct FakeWeb;
+
+    #[async_trait::async_trait]
+    impl Provider for FakeWeb {
+        fn name(&self) -> &'static str {
+            "web-bundle"
+        }
+        async fn fetch(&self, _: &str, _: Option<&str>) -> Result<Fetched, ProviderError> {
+            serves_the_bundle()
+        }
+    }
+
+    #[test]
+    fn a_web_bundle_result_is_shown_but_not_cached() {
+        let dir = tmp("webbundle");
+        let cache = Cache::new(dir.join("cache"));
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(FakeWeb)];
+
+        let r = resolve_with(SHA, None, true, &cache, &providers, root);
+        assert_eq!(r.status, Status::Verified);
+        assert_eq!(r.provider.as_deref(), Some("web-bundle"));
         assert!(!entry_file(&dir.join("cache"), SHA).exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
