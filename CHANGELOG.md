@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.4.0](https://github.com/non7top/sigstore-shell/compare/v0.3.0...v0.4.0) (2026-11-25)
+
+
+### Features
+
+* **build:** embed the link to each release asset's cosign bundle and check it in the release ([d252ec8](https://github.com/non7top/sigstore-shell/commit/d252ec8eac7fc730414372c314d714229be098dc))
+* **build:** put the repo into CompanyName and Publisher in release builds ([478f4a4](https://github.com/non7top/sigstore-shell/commit/478f4a4d8bc9018edbe0952ce80b0d53a0bbb12f))
+* **build:** write the repo into CompanyName and the installer Publisher in release builds ([6ec9672](https://github.com/non7top/sigstore-shell/commit/6ec9672f091a0d50dbf4e3ccb6801b7753bf4a1a))
+* **cli:** add --web-bundle to download the bundle the file links to ([8136d59](https://github.com/non7top/sigstore-shell/commit/8136d590ecd1a8d6e00f82a64d67f444ce498e81))
+* **cli:** verify a bundle downloaded from an https URL ([2c2b59c](https://github.com/non7top/sigstore-shell/commit/2c2b59cf0be571901b25f94846e316d40b419ad9))
+* **cli:** verify a bundle downloaded from an https URL with --bundle-url ([d0b171c](https://github.com/non7top/sigstore-shell/commit/d0b171c837c579d89a91510eb182c38418218d36))
+* **core:** guess the release bundle URL from the repo claim, ProductVersion and file name ([4898e90](https://github.com/non7top/sigstore-shell/commit/4898e909c529a58db359a71a5bb8b826933c674b))
+* **core:** read an optional bundle link from the embedded claim in PE and ELF files ([ba47d61](https://github.com/non7top/sigstore-shell/commit/ba47d61fc6d1a7931a49f6c08d35d3505b52982e))
+* **core:** read where a download came from out of its Zone.Identifier stream ([a182538](https://github.com/non7top/sigstore-shell/commit/a182538e8e8d613334c3185409857249421f8d79))
+* embed a bundle link in the claim and use it from the tab and the CLI ([719af3e](https://github.com/non7top/sigstore-shell/commit/719af3e7691e09fc669a6aa4c73d735b07fa66be))
+* **ext:** add the web_bundle setting that downloads the bundle the file links to ([42ee644](https://github.com/non7top/sigstore-shell/commit/42ee6440e1d14a32cfae072866b0c79bb87d5368))
+* **ext:** show the Zone.Identifier download hint as an unverified detail row ([ed5a182](https://github.com/non7top/sigstore-shell/commit/ed5a182c3a0efbf64a66db59a8827e48e448c07b))
+* guess the release bundle link for files that do not embed one ([28017c4](https://github.com/non7top/sigstore-shell/commit/28017c479877272168a556a19a4aa73eda555e4e))
+* show the Zone.Identifier download hint as an unverified detail ([28365c5](https://github.com/non7top/sigstore-shell/commit/28365c59297764fc14c710fcdb7664ca7608b894))
+* use the guessed bundle link for --web-bundle and the web_bundle setting ([dc86308](https://github.com/non7top/sigstore-shell/commit/dc86308d94e1f7907d435016f9761cb84e2d10e0))
+
+
+### Bug Fixes
+
+* **core:** check every bundle a provider returns before choosing the one to report ([a0c04fb](https://github.com/non7top/sigstore-shell/commit/a0c04fb7db9c7d0e65b0623343cdea6ef328a604))
+* **core:** find the PE claim without a Translation table and ignore values over the size limits ([7d64a9a](https://github.com/non7top/sigstore-shell/commit/7d64a9aed243519fe04b218c14c5f713a82448b9))
+* **core:** harden repo validation, bundle selection and the bundle download ([8ff3508](https://github.com/non7top/sigstore-shell/commit/8ff35087bf551fd87c490bb1e1922eec2f726270))
+* **core:** ignore a bundle found beside the file when it is not for it, and try every sidecar ([db811c5](https://github.com/non7top/sigstore-shell/commit/db811c5bf5cf86cd30a7109b37292e0a7bd759c3))
+* **core:** read the PE claim without a Translation table and ignore a stale sidecar ([1a26a83](https://github.com/non7top/sigstore-shell/commit/1a26a833d92e4d7c153a92403b96a37d46b44e6c))
+* **core:** reject dot-only and over-long parts in valid_repo ([affe3f5](https://github.com/non7top/sigstore-shell/commit/affe3f5886d7980a6da641abe4414c1edd1816c7))
+* **core:** report a bundle that could not be downloaded as a failed lookup and bound the download ([2564688](https://github.com/non7top/sigstore-shell/commit/25646883c298fa4430575e23a13e726109c02040))
+* do not describe a signature without a repo as a build, and show it as neutral ([5282d22](https://github.com/non7top/sigstore-shell/commit/5282d2252f352f4ef0032fa1f2326e09b91776ac))
+* **ext:** adapt to jiff 1.0 ([7fcefe9](https://github.com/non7top/sigstore-shell/commit/7fcefe9eafdbc30ee1c0e49d0be64ef57281a71a))
+* **ext:** always open the file picker from the bundle button ([7b467f3](https://github.com/non7top/sigstore-shell/commit/7b467f39e4c32ab98e165b48aa0d6fc852425b08))
+* **ext:** cache a mismatch only when GitHub returned it ([dbaa87d](https://github.com/non7top/sigstore-shell/commit/dbaa87d856aeb6c7648af5cffb8aaf957988539d))
+* **ext:** call jiff 1.0's to_zoned_datetime, which replaces to_zoned ([8ad4660](https://github.com/non7top/sigstore-shell/commit/8ad46604930b69d37b76ec34da0e7b2ebf6b640a))
+* neutral result for a signature without a repo, picker always opens, cache only GitHub mismatches ([36b56c5](https://github.com/non7top/sigstore-shell/commit/36b56c5bad2e2e706cea58f2a1e8512587f253ba))
+* say that the web bundle is downloaded only if the lookups before it do not verify the file ([77a159c](https://github.com/non7top/sigstore-shell/commit/77a159c46be6d3edfd4d5e146a564c994cbfbaf4))
+
+
+### Dependencies
+
+* bump the cargo group with 2 updates ([d3b2307](https://github.com/non7top/sigstore-shell/commit/d3b2307e88d0c8baa1ef9065695d61ffa0987085))
+
 ## [0.3.0](https://github.com/non7top/sigstore-shell/compare/v0.2.0...v0.3.0) (2026-11-25)
 
 
