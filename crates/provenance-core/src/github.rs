@@ -26,8 +26,11 @@ struct Attestation {
 
 pub fn valid_repo(repo: &str) -> bool {
     let mut parts = repo.split('/');
+    // Dot-only parts would climb out of `/repos/` once the URL is normalised; GitHub's longest is 100.
     let ok = |s: &str| {
         !s.is_empty()
+            && s.len() <= 100
+            && s.chars().any(|c| c != '.')
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
@@ -274,6 +277,17 @@ mod tests {
         assert!(!valid_repo("cli"));
         assert!(!valid_repo("a/b/c"));
         assert!(!valid_repo("a/../b?x=1"));
+        for dotty in ["../x", "a/..", "./x", "a/.", "../..", "a/...", ".../b"] {
+            assert!(!valid_repo(dotty), "{dotty}");
+        }
+        assert!(valid_repo("a.b/c..d"));
+        assert!(valid_repo(&format!(
+            "{}/{}",
+            "o".repeat(100),
+            "r".repeat(100)
+        )));
+        assert!(!valid_repo(&format!("{}/r", "o".repeat(101))));
+        assert!(!valid_repo(&format!("o/{}", "r".repeat(101))));
         assert!(!valid_repo("/b"));
     }
 
