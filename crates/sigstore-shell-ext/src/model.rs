@@ -193,7 +193,7 @@ fn cached_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
         .trim_end_matches(" UTC");
     let when = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", stamp)
         .ok()
-        .and_then(|d| d.to_zoned(jiff::tz::TimeZone::UTC).ok())
+        .and_then(|d| d.to_zoned_datetime(jiff::tz::TimeZone::UTC).ok())
         .map(|z| {
             z.with_time_zone(tz.clone())
                 .strftime("%Y-%m-%d %H:%M")
@@ -286,7 +286,11 @@ const LOW_REMAINING: u64 = 10;
 
 fn reset_clock(epoch: u64, tz: &jiff::tz::TimeZone) -> Option<String> {
     let ts = jiff::Timestamp::from_second(i64::try_from(epoch).ok()?).ok()?;
-    Some(ts.to_zoned(tz.clone()).strftime("%H:%M").to_string())
+    Some(
+        ts.to_zoned_datetime(tz.clone())
+            .strftime("%H:%M")
+            .to_string(),
+    )
 }
 
 /// Plain label until a lookup in this tab has shown the count, then e.g. "Verify  52/60".
