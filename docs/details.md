@@ -13,10 +13,13 @@ sigstore-shell-cli verify app.exe                    # repo from the embedded cl
 sigstore-shell-cli verify app.exe --repo owner/repo  # ask about a specific repo
 sigstore-shell-cli verify app.exe --rekor            # also search Rekor v1 by hash (sends the hash to a second service)
 sigstore-shell-cli verify app.exe --bundle app.exe.cosign.bundle  # verify a bundle file in hand, no GitHub lookup
+sigstore-shell-cli verify app.exe --bundle-url https://example.org/app.exe.cosign.bundle  # download the bundle, no GitHub lookup
 sigstore-shell-cli verify app.exe --json
 ```
 
 Without `--bundle`, an `app.exe.sigstore` or `app.exe.cosign.bundle` next to the file is tried after the GitHub lookup. A bundle file is a candidate like any other: it must verify for the file's SHA-256 against the public Sigstore root, so a bundle for other bytes gives "verification failed", and the identity still comes only from the certificate. Both bundle kinds work: `cosign sign-blob` (message signature) and attestations (DSSE).
+
+`--bundle-url` downloads the bundle from an https URL you give and verifies it the same way; the URL and the host prove nothing. The request goes to that host only (the CLI prints its name first), at most 4 MiB is read, redirects must stay on https and stop after 5, and a URL with a user name or password is refused. Like `--bundle`, it replaces the GitHub lookup. There is no setting that turns it on by itself: the Explorer tab does not use it, since nothing yet tells the tab where a bundle is.
 
 `GH_TOKEN` or `GITHUB_TOKEN` is used for the GitHub API if set; without one the unauthenticated limit (60 requests per hour per IP) applies. The report prints the rate-limit headers.
 
@@ -29,7 +32,7 @@ Outcomes and exit codes:
 | mismatch | 11 | Verified, but the certificate's repo differs from the embedded claim or `--repo` |
 | lookup failed | 12 | Offline, rate-limited or an error; says nothing about whether an attestation exists |
 | verification failed | 13 | An attestation was returned but did not verify |
-| not checked | 14 | No repo to ask about and neither `--bundle` nor `--rekor` given |
+| not checked | 14 | No repo to ask about and none of `--bundle`, `--bundle-url` and `--rekor` given |
 
 Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
 
