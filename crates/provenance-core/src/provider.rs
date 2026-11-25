@@ -17,6 +17,9 @@ pub struct Fetched {
     pub attestation_ids: Vec<Option<u64>>,
     pub rate_limit: Option<RateLimit>,
     pub skipped: usize,
+    /// Attestations the provider knows of but could not obtain (network, HTTP status, size limit).
+    /// Unlike `skipped`, which is data that arrived unusable, these make the answer incomplete.
+    pub failures: Vec<String>,
     /// The provider hit a server error and asked again once.
     pub retried: bool,
 }

@@ -241,45 +241,56 @@ pub async fn verify_digest_keeping_bundle(
                         fetched.skipped
                     ));
                 }
+                if !fetched.failures.is_empty() {
+                    failed = true;
+                    for why in &fetched.failures {
+                        report.notes.push(format!("{}: {why}", provider.name()));
+                    }
+                }
                 if fetched.bundles.is_empty() {
                     answered_empty = true;
                     report.searched.push(provider.name().to_string());
                     continue;
                 }
+                // Every bundle is checked before one is chosen: another identity's attestation of
+                // the same bytes must not hide one that names the expected repo.
+                let expected = options.repo.as_deref().or(claimed_repo.as_deref());
                 let mut rejected = Vec::new();
+                let mut verified = Vec::new();
                 for (i, bundle) in fetched.bundles.iter().enumerate() {
                     match verify_bundle(&verifier, digest, bundle) {
-                        Ok(identity) => {
-                            if !rejected.is_empty() {
-                                report.notes.push(format!(
-                                    "{}: {} other attestation(s) did not verify against the public Sigstore root: {}",
-                                    provider.name(),
-                                    rejected.len(),
-                                    rejected[0]
-                                ));
-                            }
-                            report.provider = Some(provider.name().to_string());
-                            let expected = options.repo.as_ref().or(claimed_repo.as_ref());
-                            let mismatch = match (&identity.repo, expected) {
-                                (Some(actual), Some(want)) => !same_repo(actual, want),
-                                (None, Some(_)) => true,
-                                _ => false,
-                            };
-                            report.status = if mismatch {
-                                Status::Mismatch
-                            } else {
-                                Status::Verified
-                            };
-                            report.identity = Some(identity);
-                            report.attestation_id = fetched.attestation_id(i);
-                            report.log_index = log_index(bundle);
-                            return Ok((report, Some(bundle.clone())));
-                        }
+                        Ok(identity) => verified.push((i, identity)),
                         Err(e) => {
                             invalid = true;
                             rejected.push(e);
                         }
                     }
+                }
+                let chosen = {
+                    let repos: Vec<Option<&str>> =
+                        verified.iter().map(|(_, id)| id.repo.as_deref()).collect();
+                    pick_match(&repos, expected)
+                };
+                if let Some(k) = chosen {
+                    let (i, identity) = verified.swap_remove(k);
+                    if !rejected.is_empty() {
+                        report.notes.push(format!(
+                            "{}: {} other attestation(s) did not verify against the public Sigstore root: {}",
+                            provider.name(),
+                            rejected.len(),
+                            rejected[0]
+                        ));
+                    }
+                    report.provider = Some(provider.name().to_string());
+                    report.status = if is_mismatch(identity.repo.as_deref(), expected) {
+                        Status::Mismatch
+                    } else {
+                        Status::Verified
+                    };
+                    report.identity = Some(identity);
+                    report.attestation_id = fetched.attestation_id(i);
+                    report.log_index = log_index(&fetched.bundles[i]);
+                    return Ok((report, Some(fetched.bundles[i].clone())));
                 }
                 for e in rejected {
                     report.notes.push(format!(
@@ -306,6 +317,23 @@ pub async fn verify_digest_keeping_bundle(
         report.notes.push(text);
     }
     Ok((report, None))
+}
+
+/// Whether an identity's repo is not the expected one; a certificate with no repo never matches.
+fn is_mismatch(actual: Option<&str>, expected: Option<&str>) -> bool {
+    match (actual, expected) {
+        (Some(actual), Some(want)) => !same_repo(actual, want),
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
+/// Which verified bundle to report: the first whose repo is the expected one, else the first.
+fn pick_match(repos: &[Option<&str>], expected: Option<&str>) -> Option<usize> {
+    repos
+        .iter()
+        .position(|repo| !is_mismatch(*repo, expected))
+        .or_else(|| (!repos.is_empty()).then_some(0))
 }
 
 /// The headline for a verified, mismatched or empty result, shared by the CLI and the tab.
@@ -368,6 +396,8 @@ mod tests {
         Empty,
         Retried,
         Fail,
+        CouldNotDownload,
+        UnusableData,
     }
 
     #[async_trait::async_trait]
@@ -392,6 +422,14 @@ mod tests {
                     ..Fetched::default()
                 }),
                 Mock::Fail => Err(ProviderError::failed("offline")),
+                Mock::CouldNotDownload => Ok(Fetched {
+                    failures: vec!["could not download an attestation: HTTP 503".into()],
+                    ..Fetched::default()
+                }),
+                Mock::UnusableData => Ok(Fetched {
+                    skipped: 1,
+                    ..Fetched::default()
+                }),
             }
         }
     }
@@ -459,6 +497,32 @@ mod tests {
             "provider":null,"identity":null,"rate_limit":null,"trust_root":"tuf","notes":[]}"#;
         let r: Report = serde_json::from_str(old).unwrap();
         assert_eq!((r.attestation_id, r.log_index), (None, None));
+    }
+
+    #[test]
+    fn a_matching_repo_is_chosen_over_an_earlier_foreign_one() {
+        let want = Some("non7top/sigstore-shell");
+        assert_eq!(
+            pick_match(&[Some("evil/fork"), Some("non7top/sigstore-shell")], want),
+            Some(1)
+        );
+        assert_eq!(
+            pick_match(&[None, Some("Non7top/Sigstore-Shell")], want),
+            Some(1)
+        );
+        assert_eq!(pick_match(&[Some("a/b"), Some("c/d")], want), Some(0));
+        assert_eq!(pick_match(&[None], want), Some(0));
+        assert_eq!(pick_match(&[], want), None);
+    }
+
+    #[test]
+    fn with_nothing_expected_the_first_verified_bundle_is_reported() {
+        assert_eq!(pick_match(&[Some("a/b"), Some("c/d")], None), Some(0));
+        assert!(!is_mismatch(None, None));
+        assert!(!is_mismatch(Some("a/b"), None));
+        assert!(is_mismatch(None, Some("a/b")));
+        assert!(is_mismatch(Some("a/c"), Some("a/b")));
+        assert!(!is_mismatch(Some("A/B"), Some("a/b")));
     }
 
     #[tokio::test]
@@ -623,6 +687,24 @@ mod tests {
             searched: vec![],
         };
         assert!(verdict_text(&r, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn an_attestation_that_could_not_be_downloaded_is_a_failed_lookup_not_none() {
+        let r = run(Mock::CouldNotDownload, DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::LookupFailed);
+        assert!(r.notes.iter().any(|n| n.contains("HTTP 503")));
+        assert!(!r
+            .notes
+            .iter()
+            .any(|n| n.starts_with("No attestation found")));
+    }
+
+    #[tokio::test]
+    async fn data_that_arrived_unusable_is_still_no_attestation_with_a_note() {
+        let r = run(Mock::UnusableData, DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::NoAttestation);
+        assert!(r.notes.iter().any(|n| n.contains("ignored 1 entries")));
     }
 
     #[tokio::test]
