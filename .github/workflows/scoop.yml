@@ -1,0 +1,181 @@
+name: scoop
+
+# Reusable workflow for a Scoop bucket: manifest tests, a Windows install check and the autoupdate PR.
+# Call it with `uses: <owner>/<repo>/.github/workflows/scoop.yml@<ref>` (or `./.github/workflows/scoop.yml`).
+#
+# It checks out ScoopInstaller/Scoop and runs Scoop's own test and checkver code against the bucket-dir
+# input. A caller therefore needs none of BucketTemplate's bin/ scripts or Scoop-Bucket.Tests.ps1.
+# ScoopInstaller/GithubActions (the template's excavator) is not used: it reads manifests only from
+# <workspace>/bucket and pushes straight to the branch, while the autoupdate job here opens a PR.
+# A PR opened with GITHUB_TOKEN does not start other workflows, so its checks need a manual re-run.
+
+on:
+  workflow_call:
+    inputs:
+      bucket-dir:
+        description: Directory with the manifests, relative to the repository root
+        type: string
+        default: bucket
+      app:
+        description: Manifest name pattern for checkver, the install check and autoupdate (placeholders allowed)
+        type: string
+        default: '*'
+      scoop-ref:
+        description: ScoopInstaller/Scoop ref whose tests and checkver are used
+        type: string
+        default: master
+      smoke-script:
+        description: PowerShell script, relative to the repository root, run after the manifests are installed (optional)
+        type: string
+        default: ''
+      test:
+        description: Run the manifest tests and the Windows install check
+        type: boolean
+        default: true
+      autoupdate:
+        description: Run checkver -Update and open or refresh a PR with the result (the caller must grant contents and pull-requests write)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: inputs.test
+    name: Validate (${{ matrix.shell }})
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      BUCKET_DIR: ${{ inputs.bucket-dir }}
+      APP: ${{ inputs.app }}
+      SCOOP_GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout the bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Scoop's tests only validate the manifests changed by the last commit when CI is set.
+          fetch-depth: 2
+      - name: Checkout Scoop
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ScoopInstaller/Scoop
+          ref: ${{ inputs.scoop-ref }}
+          path: scoop_core
+      - name: Install and cache test dependencies
+        uses: potatoqualitee/psmodulecache@9e4b63833c22c1768d648e115a9c849afdda22a5 # v6.3
+        with:
+          modules-to-cache: BuildHelpers, Pester
+          shell: ${{ matrix.shell }}
+      - name: Run the Scoop bucket tests
+        run: |
+          $env:SCOOP_HOME = Convert-Path 'scoop_core'
+          $wrapper = Join-Path $env:RUNNER_TEMP 'bucket.Tests.ps1'
+          Set-Content -Path $wrapper -Value @(
+              'param([String] $BucketPath)',
+              '. "$env:SCOOP_HOME\test\Import-Bucket-Tests.ps1" -BucketPath $BucketPath'
+          )
+          $container = New-PesterContainer -Path $wrapper -Data @{ BucketPath = (Convert-Path $env:BUCKET_DIR) }
+          $config = New-PesterConfiguration -Hashtable @{
+              Run    = @{ Container = $container; PassThru = $true }
+              Output = @{ Verbosity = 'Detailed' }
+          }
+          $result = Invoke-Pester -Configuration $config
+          exit $result.FailedCount
+      - name: Check that checkver finds the current version
+        if: matrix.shell == 'pwsh'
+        run: |
+          $env:SCOOP_HOME = Convert-Path 'scoop_core'
+          & "$env:SCOOP_HOME\bin\checkver.ps1" -App $env:APP -Dir (Convert-Path $env:BUCKET_DIR) -ThrowError
+
+  install:
+    if: inputs.test
+    name: Install on Windows
+    needs: validate
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      BUCKET_DIR: ${{ inputs.bucket-dir }}
+      APP: ${{ inputs.app }}
+      SMOKE_SCRIPT: ${{ inputs.smoke-script }}
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout the bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Pinned to a commit of ScoopInstaller/Install; -RunAsAdmin because the runner is elevated.
+      - name: Install Scoop
+        run: |
+          $script = Invoke-RestMethod 'https://raw.githubusercontent.com/ScoopInstaller/Install/1e2f334083d609986d8c8bc9e31ae8e87c39fab4/install.ps1'
+          & ([scriptblock]::Create($script)) -RunAsAdmin
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:USERPROFILE 'scoop\shims') -Encoding utf8
+      - name: Install each manifest from the checkout
+        run: |
+          $manifests = @(Get-ChildItem -Path $env:BUCKET_DIR -Filter "$env:APP.json")
+          if ($manifests.Count -eq 0) { throw "No manifest matches $env:APP in $env:BUCKET_DIR" }
+          foreach ($m in $manifests) {
+              scoop install $m.FullName
+              if ($LASTEXITCODE -ne 0) { throw "scoop install $($m.Name) failed" }
+          }
+      - name: Run the smoke script
+        if: inputs.smoke-script != ''
+        run: '& (Resolve-Path $env:SMOKE_SCRIPT)'
+
+  autoupdate:
+    if: inputs.autoupdate
+    name: Autoupdate
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      BUCKET_DIR: ${{ inputs.bucket-dir }}
+      APP: ${{ inputs.app }}
+      GH_TOKEN: ${{ github.token }}
+      SCOOP_GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout the bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout Scoop
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ScoopInstaller/Scoop
+          ref: ${{ inputs.scoop-ref }}
+          path: scoop_core
+      - name: Update the manifests
+        run: |
+          $env:SCOOP_HOME = Convert-Path 'scoop_core'
+          & "$env:SCOOP_HOME\bin\checkver.ps1" -App $env:APP -Dir (Convert-Path $env:BUCKET_DIR) -Update -SkipUpdated
+      - name: Open or refresh the update PR
+        run: |
+          $changed = @(git status --porcelain --untracked-files=no -- $env:BUCKET_DIR | ForEach-Object { $_.Substring(3) })
+          if ($changed.Count -eq 0) { Write-Host 'Nothing to update'; exit 0 }
+          $names = ($changed | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_) }) -join ', '
+          $versions = ($changed | ForEach-Object { (Get-Content $_ -Raw | ConvertFrom-Json).version }) -join ', '
+          $title = "chore(scoop): update $names to $versions"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c scoop-autoupdate
+          git add -- $changed
+          git commit -m $title
+          git push origin HEAD:refs/heads/scoop-autoupdate --force
+          $open = gh pr list --head scoop-autoupdate --state open --json number --jq '.[0].number'
+          if ($open) {
+              gh pr edit $open --title $title
+          } else {
+              gh pr create --head scoop-autoupdate --title $title --body 'Opened by the autoupdate job in the reusable Scoop workflow: checkver -Update rewrote the manifests listed in the title.'
+          }
