@@ -35,6 +35,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Apache License 2.0"
 ; Absent on local builds, so they make no claim about where they came from.
 !ifdef PROVENANCE_REPO
   VIAddVersionKey /LANG=1033 "ProvenanceRepo" "${PROVENANCE_REPO}"
+  VIAddVersionKey /LANG=1033 "CompanyName" "${PROVENANCE_REPO}"
   !ifdef BUNDLE_URL
     VIAddVersionKey /LANG=1033 "ProvenanceBundle" "${BUNDLE_URL}"
   !endif
@@ -85,7 +86,11 @@ Section "Install"
 !ifdef COMMIT
   WriteRegStr HKLM "${UNINST_KEY}" "BuildCommit" "${COMMIT}"
 !endif
-  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "non7top"
+  !ifdef PROVENANCE_REPO
+    WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${PROVENANCE_REPO}"
+  !else
+    WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "non7top"
+  !endif
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
