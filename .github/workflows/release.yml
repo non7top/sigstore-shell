@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.find_tag.outputs.tag }}
+      tag_commit: ${{ steps.find_tag.outputs.tag_commit }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,6 +40,9 @@ jobs:
             TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "tag_commit=$(git rev-parse "refs/tags/$TAG^{commit}")" >> "$GITHUB_OUTPUT"
+          fi
 
   release:
     needs: check-release-tag
@@ -61,6 +65,10 @@ jobs:
         env:
           TAG: ${{ needs.check-release-tag.outputs.tag }}
 
+      # GITHUB_SHA is the default branch tip under workflow_run, so the commit comes from the checked-out tree.
+      - name: Record the commit being built
+        run: echo "RELEASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Build the Explorer extension DLL
         run: make dll
 
@@ -77,6 +85,21 @@ jobs:
         run: make package VERSION="${TAG#v}"
         env:
           TAG: ${{ needs.check-release-tag.outputs.tag }}
+
+      # A backfill builds the dispatch ref, which may legitimately differ from the tagged commit.
+      - name: Check the tag, the commit and every built file agree
+        env:
+          TAG_COMMIT: ${{ needs.check-release-tag.outputs.tag_commit }}
+        run: |
+          if [ "$RELEASE_COMMIT" != "$TAG_COMMIT" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::warning::Building $RELEASE_COMMIT, but the tag points to $TAG_COMMIT"
+            else
+              echo "::error::Building $RELEASE_COMMIT, but the tag points to $TAG_COMMIT"
+              exit 1
+            fi
+          fi
+          python3 -I scripts/check-release.py "$RELEASE_VERSION" "$RELEASE_COMMIT" dist
 
       # Attestation is by digest, so nothing may rewrite these files after this step.
       - name: Attest build provenance
@@ -107,3 +130,16 @@ jobs:
           gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY"
           dist/sigstore_shell_ext.dll dist/sigstore-shell-cli.exe dist/sigstore-shell-Setup-*.exe dist/sigstore-shell-cli
           dist/sigstore-shell-ext-*-windows-x64.zip dist/SHA256SUMS dist/*.cosign.bundle
+
+      # Appended once; the marker line in the file keeps a backfill from adding it twice.
+      - name: State the platform and architecture of each file in the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-release-tag.outputs.tag }}
+        run: |
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          if printf '%s' "$body" | grep -qF '<!-- release-files -->'; then
+            exit 0
+          fi
+          { printf '%s\n\n' "$body"; cat docs/release-files.md; } > "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
