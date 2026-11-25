@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   # Debug-profile work (clippy, tests) and the release-profile package build share no compiled
-  # artifacts, so they run as separate jobs, each with its own cache.
+  # artifacts, so they run as separate jobs, each with its own cache. Both build on the runner,
+  # with the toolchain pinned in rust-toolchain.toml.
   check:
     runs-on: ubuntu-latest
     permissions:
@@ -23,38 +24,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Host directories instead of the compose named volumes, so actions/cache can carry them between runs.
-      - name: Point the cargo caches at host directories
-        run: |
-          mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/cargo-target"
-          echo "CARGO_CACHE=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "TARGET_CACHE=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
-
-      - name: Restore the cargo caches
-        id: cache
-        uses: actions/cache/restore@v6
+      - uses: ./.github/actions/setup-build
         with:
-          path: |
-            ${{ runner.temp }}/cargo
-            ${{ runner.temp }}/cargo-target
-          key: cargo-check-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
-          restore-keys: cargo-check-
+          cache-key: check
+          # Only master saves: PR-scoped caches are unreadable by other PRs and would evict it.
+          save-cache: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Lint
-        run: make lint
+        run: make lint CARGO=cargo
 
       - name: Test
-        run: make test
-
-      # Only master saves: PR-scoped caches are unreadable by other PRs and would evict it.
-      - name: Save the cargo caches
-        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ${{ runner.temp }}/cargo
-            ${{ runner.temp }}/cargo-target
-          key: cargo-check-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
+        run: make test CARGO=cargo
 
   package:
     runs-on: ubuntu-latest
@@ -71,22 +51,6 @@ jobs:
       - name: Record the checked-out commit
         id: checked_out
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Point the cargo caches at host directories
-        run: |
-          mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/cargo-target"
-          echo "CARGO_CACHE=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "TARGET_CACHE=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
-
-      - name: Restore the cargo caches
-        id: cache
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            ${{ runner.temp }}/cargo
-            ${{ runner.temp }}/cargo-target
-          key: cargo-release-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
-          restore-keys: cargo-release-
 
       - name: Predict next version
         id: predict
@@ -115,21 +79,20 @@ jobs:
             echo "version=$sha_short" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: ./.github/actions/setup-build
+        with:
+          cache-key: release
+          save-cache: ${{ github.ref == 'refs/heads/master' }}
+
       # No PROVENANCE_REPO: only release builds claim to come from the repo's workflow.
-      - name: Build the DLL
-        run: make dll
-
-      - name: Build the Windows CLI
-        run: make cli-win
-
-      - name: Build the Linux CLI
-        run: make build
+      - name: Build the binaries
+        run: ./scripts/build-dist.sh
 
       - name: Build the installer
-        run: make installer VERSION=${{ steps.vars.outputs.version }}
+        run: ./scripts/installer.sh ${{ steps.vars.outputs.version }}
 
       - name: Package
-        run: make package VERSION=${{ steps.vars.outputs.version }}
+        run: ./scripts/package.sh ${{ steps.vars.outputs.version }}
 
       - uses: sigstore/cosign-installer@v4.1.3
 
@@ -187,12 +150,3 @@ jobs:
           - [sigstore-shell-Setup-${{ steps.vars.outputs.version }}.exe](${{ steps.upload-installer.outputs.artifact-url }}) (installer, unsigned)
           - [sigstore-shell-cli.exe](${{ steps.upload-cli.outputs.artifact-url }})
           - [sigstore-shell-cli](${{ steps.upload-cli-linux.outputs.artifact-url }}) (Linux)"
-
-      - name: Save the cargo caches
-        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ${{ runner.temp }}/cargo
-            ${{ runner.temp }}/cargo-target
-          key: cargo-release-${{ hashFiles('Cargo.lock', 'Dockerfile') }}
