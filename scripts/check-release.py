@@ -7,6 +7,7 @@ With a repo, each file must also embed the link to the cosign bundle of its own 
 Windows file must name the repo as its CompanyName.
 """
 import re
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,16 @@ def has_resource_string(data, key, value):
     # VS_VERSION_INFO string entry: UTF-16 key, NUL, 0 or 2 bytes of padding, UTF-16 value, NUL.
     pattern = re.escape(utf16(key)) + rb"\x00\x00(?:\x00\x00)?" + re.escape(utf16(value)) + rb"\x00\x00"
     return re.search(pattern, data) is not None
+
+
+def fixed_versions(data):
+    # VS_FIXEDFILEINFO: signature 0xFEEF04BD, struct version, then file and product version as MS/LS words.
+    at = data.find(b"\xbd\x04\xef\xfe")
+    if at < 0 or len(data) < at + 20:
+        return None
+    file_ms, file_ls, prod_ms, prod_ls = struct.unpack_from("<4I", data, at + 8)
+    fmt = lambda ms, ls: f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+    return fmt(file_ms, file_ls), fmt(prod_ms, prod_ls)
 
 
 def main():
@@ -54,6 +65,15 @@ def main():
             print(f"{path.name}: {key} = {value}: {'ok' if ok else 'MISSING'}")
             if not ok:
                 failures.append(f"{path.name} has no {key} = {value} in its version resource")
+        numeric = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+        if numeric:
+            want = ".".join(numeric.groups()) + ".0"
+            got = fixed_versions(data)
+            for label, value in zip(("FILEVERSION", "PRODUCTVERSION"), got or (None, None)):
+                ok = value == want
+                print(f"{path.name}: numeric {label} = {want}: {'ok' if ok else 'MISSING (' + str(value) + ')'}")
+                if not ok:
+                    failures.append(f"{path.name} has numeric {label} {value}, expected {want}")
         if repo:
             ok = has_resource_string(data, "CompanyName", repo)
             print(f"{path.name}: CompanyName = {repo}: {'ok' if ok else 'MISSING'}")

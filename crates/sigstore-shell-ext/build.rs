@@ -104,6 +104,11 @@ fn main() {
     if let Some(version) = build_id::release_version() {
         res.set("FileVersion", &version);
         res.set("ProductVersion", &version);
+        // Explorer shows File version from the numeric field, which winresource fills from the crate version.
+        if let Some(number) = build_id::numeric_version() {
+            res.set_version_info(winresource::VersionInfo::FILEVERSION, number);
+            res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, number);
+        }
     }
     if let Some(commit) = build_id::known_commit() {
         res.set("BuildCommit", &commit);

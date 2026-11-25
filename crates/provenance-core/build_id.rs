@@ -20,6 +20,16 @@ pub fn release_version() -> Option<String> {
     env_nonempty("RELEASE_VERSION")
 }
 
+/// The release version as the four-part number of a Windows version resource (major.minor.patch.0),
+/// or None for a local build or a version that does not start with x.y.z.
+pub fn numeric_version() -> Option<u64> {
+    let version = release_version()?;
+    let mut parts = version.split(|c: char| !c.is_ascii_digit()).take(3);
+    let mut next = || parts.next()?.parse::<u16>().ok();
+    let (major, minor, patch) = (next()?, next()?, next()?);
+    Some((u64::from(major) << 48) | (u64::from(minor) << 32) | (u64::from(patch) << 16))
+}
+
 /// Where the release workflow publishes the cosign bundle of the release asset `asset`; None unless
 /// both PROVENANCE_REPO and RELEASE_VERSION are set, as in a release build.
 pub fn bundle_url(asset: &str) -> Option<String> {
