@@ -423,7 +423,13 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
     let mut outcome = Outcome::Bad;
     let headline = match report.status {
         Status::Verified => {
-            outcome = Outcome::Good;
+            // Green says "built by this repo"; a certificate without a repo only signs the file.
+            let names_repo = report.identity.as_ref().is_some_and(|i| i.repo.is_some());
+            outcome = if names_repo {
+                Outcome::Good
+            } else {
+                Outcome::Neutral
+            };
             verdict_text(report, claim.repo()).unwrap_or_default()
         }
         Status::Mismatch => verdict_text(report, claim.repo()).unwrap_or_default(),
@@ -670,6 +676,25 @@ mod tests {
             }),
             ..report(Status::Verified)
         }
+    }
+
+    #[test]
+    fn a_personal_signature_is_neutral_and_not_called_a_build() {
+        let r = Report {
+            identity: Some(Identity {
+                san: Some("someone@example.org".into()),
+                ..Identity::default()
+            }),
+            ..report(Status::Verified)
+        };
+        let v = view(&Claim::Absent, &State::Done(Box::new(r)), true);
+        assert_eq!(v.outcome, Outcome::Neutral);
+        assert_eq!(
+            v.headline,
+            "Signed by someone@example.org. This is a signature on this file, not build provenance."
+        );
+        assert!(!v.headline.contains("built"));
+        assert!(v.links.is_empty());
     }
 
     fn running(job: u64) -> State {
@@ -1008,7 +1033,16 @@ mod tests {
     #[test]
     fn outcome_per_status() {
         let o = |s| view(&Claim::Absent, &State::Done(Box::new(report(s))), true).outcome;
-        assert_eq!(o(Status::Verified), Outcome::Good);
+        let with_repo = Report {
+            identity: Some(Identity {
+                repo: Some("cli/cli".into()),
+                ..Identity::default()
+            }),
+            ..report(Status::Verified)
+        };
+        let green = view(&Claim::Absent, &State::Done(Box::new(with_repo)), true).outcome;
+        assert_eq!(green, Outcome::Good);
+        assert_eq!(o(Status::Verified), Outcome::Neutral);
         assert_eq!(o(Status::Mismatch), Outcome::Bad);
         assert_eq!(o(Status::VerificationFailed), Outcome::Bad);
         assert_eq!(o(Status::NoAttestation), Outcome::Neutral);
