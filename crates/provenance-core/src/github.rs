@@ -4,6 +4,15 @@ use sigstore_verify::types::Bundle;
 use std::time::Duration;
 
 const API: &str = "https://api.github.com";
+/// The most that is read from a bundle blob, and the most it may expand to.
+const MAX_BLOB_BYTES: usize = 4 << 20;
+const MAX_BUNDLE_BYTES: usize = 16 << 20;
+
+/// Why a bundle blob gave no bundle: it could not be obtained, or it arrived unusable.
+enum Blob {
+    Unobtainable(String),
+    Unusable,
+}
 
 pub struct GithubProvider {
     client: reqwest::Client,
@@ -134,19 +143,49 @@ impl GithubProvider {
     }
 
     /// The API now returns a short-lived blob URL instead of the bundle; the blob is
-    /// Snappy-compressed JSON and must not receive the GitHub token.
-    async fn download_bundle(&self, url: &str) -> Option<Bundle> {
-        let resp = self.client.get(url).send().await.ok()?;
+    /// Snappy-compressed JSON and must not receive the GitHub token. The URL carries signed
+    /// tokens, so no message here may contain it.
+    async fn download_bundle(&self, url: &str) -> Result<Bundle, Blob> {
+        let mut resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Blob::Unobtainable(format!("request failed: {}", e.without_url())))?;
         if !resp.status().is_success() {
-            return None;
+            return Err(Blob::Unobtainable(format!("HTTP {}", resp.status())));
         }
-        let body = resp.bytes().await.ok()?;
+        let too_large = || Blob::Unobtainable(format!("larger than {MAX_BLOB_BYTES} bytes"));
+        if resp
+            .content_length()
+            .is_some_and(|n| n > MAX_BLOB_BYTES as u64)
+        {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| Blob::Unobtainable(format!("read failed: {}", e.without_url())))?
+        {
+            if body.len() + chunk.len() > MAX_BLOB_BYTES {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
         let json = if body.first() == Some(&b'{') {
-            body.to_vec()
+            body
         } else {
-            snap::raw::Decoder::new().decompress_vec(&body).ok()?
+            let declared = snap::raw::decompress_len(&body).map_err(|_| Blob::Unusable)?;
+            if declared > MAX_BUNDLE_BYTES {
+                return Err(Blob::Unusable);
+            }
+            snap::raw::Decoder::new()
+                .decompress_vec(&body)
+                .map_err(|_| Blob::Unusable)?
         };
-        Bundle::from_json(std::str::from_utf8(&json).ok()?).ok()
+        let text = std::str::from_utf8(&json).map_err(|_| Blob::Unusable)?;
+        Bundle::from_json(text).map_err(|_| Blob::Unusable)
     }
 }
 
@@ -214,7 +253,16 @@ impl Provider for GithubProvider {
             let page_id = attestation.bundle_url.as_deref().and_then(attestation_id);
             let parsed = match (attestation.bundle, attestation.bundle_url) {
                 (Some(inline), _) => Bundle::from_json(&inline.to_string()).ok(),
-                (None, Some(url)) => self.download_bundle(&url).await,
+                (None, Some(url)) => match self.download_bundle(&url).await {
+                    Ok(bundle) => Some(bundle),
+                    Err(Blob::Unobtainable(why)) => {
+                        fetched
+                            .failures
+                            .push(format!("could not download an attestation: {why}"));
+                        continue;
+                    }
+                    Err(Blob::Unusable) => None,
+                },
                 (None, None) => None,
             };
             match parsed {
@@ -378,6 +426,97 @@ mod tests {
             .unwrap();
         assert_eq!((fetched.bundles.len(), fetched.skipped), (1, 1));
         assert_eq!(fetched.attestation_id(0), Some(53_806_567));
+    }
+
+    /// Answers the API request with one attestation whose blob URL points back at this server,
+    /// then answers the blob request with `blob` (a complete HTTP response).
+    fn serve_api_then_blob(blob: Vec<u8>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let api = format!(
+            r#"{{"attestations":[{{"bundle_url":"{base}/blob/53806567.json.sn?sig=SECRET"}}]}}"#
+        );
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{api}",
+                api.len()
+            );
+            let _ = conn.write_all(head.as_bytes());
+            drop(conn);
+            let Ok((mut conn, _)) = listener.accept() else {
+                return;
+            };
+            let _ = conn.read(&mut buf);
+            let _ = conn.write_all(&blob);
+        });
+        base
+    }
+
+    fn response(status: &str, body: &[u8]) -> Vec<u8> {
+        let mut r = format!(
+            "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        r.extend_from_slice(body);
+        r
+    }
+
+    #[tokio::test]
+    async fn a_blob_that_cannot_be_downloaded_is_a_failure_that_does_not_leak_its_url() {
+        let base = serve_api_then_blob(response("500 Internal Server Error", b""));
+        let fetched = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap();
+        assert!(fetched.bundles.is_empty());
+        assert_eq!(fetched.skipped, 0);
+        assert_eq!(fetched.failures.len(), 1);
+        assert!(fetched.failures[0].contains("500"));
+        assert!(
+            !fetched.failures[0].contains("SECRET"),
+            "{:?}",
+            fetched.failures
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blob_that_arrives_unusable_is_skipped_not_failed() {
+        for body in [
+            &b"not a bundle at all"[..],
+            &[0x80, 0x80, 0x80, 0x80, 0x04, 0x00][..],
+        ] {
+            let base = serve_api_then_blob(response("200 OK", body));
+            let fetched = provider(&base)
+                .fetch(&"a".repeat(64), Some("cli/cli"))
+                .await
+                .unwrap();
+            assert_eq!(
+                (fetched.skipped, fetched.failures.len()),
+                (1, 0),
+                "{body:?}"
+            );
+            assert!(fetched.bundles.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blob_over_the_limit_is_refused_by_its_declared_length() {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            MAX_BLOB_BYTES + 1
+        );
+        let base = serve_api_then_blob(head.into_bytes());
+        let fetched = provider(&base)
+            .fetch(&"a".repeat(64), Some("cli/cli"))
+            .await
+            .unwrap();
+        assert_eq!(fetched.failures.len(), 1);
+        assert!(fetched.failures[0].contains("larger than"));
     }
 
     #[tokio::test]

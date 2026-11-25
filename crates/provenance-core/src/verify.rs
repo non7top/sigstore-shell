@@ -241,6 +241,12 @@ pub async fn verify_digest_keeping_bundle(
                         fetched.skipped
                     ));
                 }
+                if !fetched.failures.is_empty() {
+                    failed = true;
+                    for why in &fetched.failures {
+                        report.notes.push(format!("{}: {why}", provider.name()));
+                    }
+                }
                 if fetched.bundles.is_empty() {
                     answered_empty = true;
                     report.searched.push(provider.name().to_string());
@@ -390,6 +396,8 @@ mod tests {
         Empty,
         Retried,
         Fail,
+        CouldNotDownload,
+        UnusableData,
     }
 
     #[async_trait::async_trait]
@@ -414,6 +422,14 @@ mod tests {
                     ..Fetched::default()
                 }),
                 Mock::Fail => Err(ProviderError::failed("offline")),
+                Mock::CouldNotDownload => Ok(Fetched {
+                    failures: vec!["could not download an attestation: HTTP 503".into()],
+                    ..Fetched::default()
+                }),
+                Mock::UnusableData => Ok(Fetched {
+                    skipped: 1,
+                    ..Fetched::default()
+                }),
             }
         }
     }
@@ -671,6 +687,24 @@ mod tests {
             searched: vec![],
         };
         assert!(verdict_text(&r, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn an_attestation_that_could_not_be_downloaded_is_a_failed_lookup_not_none() {
+        let r = run(Mock::CouldNotDownload, DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::LookupFailed);
+        assert!(r.notes.iter().any(|n| n.contains("HTTP 503")));
+        assert!(!r
+            .notes
+            .iter()
+            .any(|n| n.starts_with("No attestation found")));
+    }
+
+    #[tokio::test]
+    async fn data_that_arrived_unusable_is_still_no_attestation_with_a_note() {
+        let r = run(Mock::UnusableData, DIGEST, Some("cli/cli")).await;
+        assert_eq!(r.status, Status::NoAttestation);
+        assert!(r.notes.iter().any(|n| n.contains("ignored 1 entries")));
     }
 
     #[tokio::test]
