@@ -5,43 +5,55 @@ use std::path::{Path, PathBuf};
 const MAX_BUNDLE_BYTES: u64 = 4 << 20;
 const SIDECAR_SUFFIXES: [&str; 2] = [".sigstore", ".cosign.bundle"];
 
-/// A bundle read from a file on disk. It is only a candidate: it goes through the same
-/// verification as a downloaded one, so the file's name or location proves nothing.
+/// Bundles read from files on disk. They are only candidates: they go through the same
+/// verification as a downloaded one, so a file's name or location proves nothing.
+///
+/// One the user named (`new`) is strict: a file that cannot be read or does not verify fails the
+/// lookup. Those found by name beside the file (`beside`) are lenient: the user never named them, so
+/// one that is unreadable or is for other bytes is ignored with a note.
 pub struct BundleFile {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
+    lenient: bool,
 }
 
 impl BundleFile {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            paths: vec![path.into()],
+            lenient: false,
+        }
     }
 
-    /// The `FILE.sigstore` or `FILE.cosign.bundle` that sits next to `file`, if one exists.
+    /// Every `FILE.sigstore` and `FILE.cosign.bundle` that sits next to `file`, if any exists.
     pub fn beside(file: &Path) -> Option<Self> {
-        SIDECAR_SUFFIXES
+        let paths: Vec<PathBuf> = SIDECAR_SUFFIXES
             .iter()
             .map(|suffix| {
                 let mut name = file.as_os_str().to_owned();
                 name.push(suffix);
                 PathBuf::from(name)
             })
-            .find(|candidate| candidate.is_file())
-            .map(Self::new)
+            .filter(|candidate| candidate.is_file())
+            .collect();
+        (!paths.is_empty()).then_some(Self {
+            paths,
+            lenient: true,
+        })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
     }
 
-    fn load(&self) -> Result<Bundle, String> {
-        let shown = self.path.display();
-        let len = std::fs::metadata(&self.path)
+    fn load(path: &Path) -> Result<Bundle, String> {
+        let shown = path.display();
+        let len = std::fs::metadata(path)
             .map_err(|e| format!("{shown}: {e}"))?
             .len();
         if len > MAX_BUNDLE_BYTES {
             return Err(format!("{shown}: {len} bytes is too large for a bundle"));
         }
-        let text = std::fs::read_to_string(&self.path).map_err(|e| format!("{shown}: {e}"))?;
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
         Bundle::from_json(&text).map_err(|e| format!("{shown}: not a Sigstore bundle: {e}"))
     }
 }
@@ -52,12 +64,20 @@ impl Provider for BundleFile {
         "bundle-file"
     }
 
+    fn lenient(&self) -> bool {
+        self.lenient
+    }
+
     async fn fetch(&self, _: &str, _: Option<&str>) -> Result<Fetched, ProviderError> {
-        let bundle = self.load().map_err(ProviderError::failed)?;
-        Ok(Fetched {
-            bundles: vec![bundle],
-            ..Fetched::default()
-        })
+        let mut fetched = Fetched::default();
+        for path in &self.paths {
+            match Self::load(path) {
+                Ok(bundle) => fetched.bundles.push(bundle),
+                Err(_) if self.lenient => fetched.skipped += 1,
+                Err(e) => return Err(ProviderError::failed(e)),
+            }
+        }
+        Ok(fetched)
     }
 }
 
@@ -157,8 +177,58 @@ mod tests {
         let dir = scratch("big");
         let big = dir.join("big.sigstore");
         std::fs::write(&big, vec![b' '; MAX_BUNDLE_BYTES as usize + 1]).unwrap();
-        let err = BundleFile::new(&big).load().unwrap_err();
+        let err = BundleFile::load(&big).unwrap_err();
         assert!(err.contains("too large"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_for_other_bytes_is_noted_and_ignored_but_a_chosen_bundle_still_fails() {
+        let dir = scratch("stale");
+        let file = dir.join("app.exe");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::copy(fixture(DSSE_BUNDLE), dir.join("app.exe.sigstore")).unwrap();
+        let (root, source) = load_embedded_root().unwrap();
+
+        let sidecar: Vec<Box<dyn Provider>> = vec![Box::new(BundleFile::beside(&file).unwrap())];
+        let r = verify_file(&file, &Options::default(), &sidecar, &root, source)
+            .await
+            .unwrap();
+        assert_eq!(r.status, Status::NoAttestation);
+        assert!(r
+            .notes
+            .iter()
+            .any(|n| n.contains("ignored a bundle beside the file")));
+        assert!(!r
+            .notes
+            .iter()
+            .any(|n| n.contains("attestation did not verify")));
+
+        let chosen: Vec<Box<dyn Provider>> =
+            vec![Box::new(BundleFile::new(dir.join("app.exe.sigstore")))];
+        let (root, source) = load_embedded_root().unwrap();
+        let r = verify_file(&file, &Options::default(), &chosen, &root, source)
+            .await
+            .unwrap();
+        assert_eq!(r.status, Status::VerificationFailed);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_sidecar_is_tried_so_a_corrupt_first_one_does_not_hide_a_valid_second() {
+        let dir = scratch("both");
+        let file = dir.join("sums");
+        std::fs::copy(fixture(SUMS), &file).unwrap();
+        std::fs::write(dir.join("sums.sigstore"), "not a bundle").unwrap();
+        std::fs::copy(fixture(SUMS_BUNDLE), dir.join("sums.cosign.bundle")).unwrap();
+        let (root, source) = load_embedded_root().unwrap();
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(BundleFile::beside(&file).unwrap())];
+        let r = verify_file(&file, &Options::default(), &providers, &root, source)
+            .await
+            .unwrap();
+        assert_eq!(r.status, Status::Verified);
+        assert_eq!(r.provider.as_deref(), Some("bundle-file"));
+        assert!(r.notes.iter().any(|n| n.contains("ignored 1 entries")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -171,11 +241,19 @@ mod tests {
 
         std::fs::write(dir.join("app.exe.cosign.bundle"), "{}").unwrap();
         let found = BundleFile::beside(&file).unwrap();
-        assert_eq!(found.path(), dir.join("app.exe.cosign.bundle"));
+        assert_eq!(found.paths(), [dir.join("app.exe.cosign.bundle")]);
 
         std::fs::write(dir.join("app.exe.sigstore"), "{}").unwrap();
         let found = BundleFile::beside(&file).unwrap();
-        assert_eq!(found.path(), dir.join("app.exe.sigstore"));
+        assert_eq!(
+            found.paths(),
+            [
+                dir.join("app.exe.sigstore"),
+                dir.join("app.exe.cosign.bundle")
+            ]
+        );
+        assert!(found.lenient());
+        assert!(!BundleFile::new(file.clone()).lenient());
 
         std::fs::write(dir.join("other.exe.sigstore"), "{}").unwrap();
         assert!(BundleFile::beside(&dir.join("other2.exe")).is_none());

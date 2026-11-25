@@ -11,9 +11,9 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 | 3 | The first verified bundle ends the search | confirmed, fails in the safe direction | [#77](https://github.com/non7top/sigstore-shell/issues/77) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
 | 4 | A verified result without a repo shows green and "built by the signer shown below" | confirmed, an outcome problem and not only wording | [#78](https://github.com/non7top/sigstore-shell/issues/78) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
 | 5 | Mismatched attestations are cached for 7 days | overstated as written, real for a Rekor mismatch | [#84](https://github.com/non7top/sigstore-shell/issues/84) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
-| 6 | A stale sidecar turns "No attestation" into "Verification failed"; only the first sidecar is tried | confirmed, partly by design | [#79](https://github.com/non7top/sigstore-shell/issues/79) | open |
+| 6 | A stale sidecar turns "No attestation" into "Verification failed"; only the first sidecar is tried | confirmed | [#79](https://github.com/non7top/sigstore-shell/issues/79) | [#86](https://github.com/non7top/sigstore-shell/pull/86) |
 | 7 | "Choose bundle..." reuses an existing sidecar | a limitation, documented but wrong | [#83](https://github.com/non7top/sigstore-shell/issues/83) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
-| 8 | PE claim needs `VarFileInfo\Translation`, no size limit | confirmed from pelite's source | [#80](https://github.com/non7top/sigstore-shell/issues/80) | open (touches `pe.rs`, changed by #69 and #72) |
+| 8 | PE claim needs `VarFileInfo\Translation`, no size limit | confirmed from pelite's source and by a failing test | [#80](https://github.com/non7top/sigstore-shell/issues/80) | [#86](https://github.com/non7top/sigstore-shell/pull/86) |
 | 9 | Case-sensitive cache repo comparison | not reachable | none | none |
 | 10 | Unbounded download and decompression in `download_bundle` | confirmed, low risk | [#81](https://github.com/non7top/sigstore-shell/issues/81) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
 
@@ -65,7 +65,9 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 - Description: a `FILE.sigstore` or `FILE.cosign.bundle` beside the file is tried after the GitHub lookup. If it is for other bytes, `invalid` outranks `answered_empty`, so even when GitHub says there is no attestation the result is "ATTESTATION DID NOT VERIFY ... Do not rely on it". `beside` returns only the first sidecar that exists, so a corrupt `.sigstore` hides a valid `.cosign.bundle`.
 - Verdict: the behaviour is described in `docs/details.md` for a bundle the user gave; for one only found by name it is a strong claim about a file the user never named.
 - Checked: read `beside` and the status chain.
-- Status: issue #79, open. Suggestion: keep `--bundle` and the picker strict; for a sidecar found by name, note that it was ignored and try every sidecar.
+- Decision: keep `--bundle` and the picker strict; a sidecar found by name is lenient: if it is unreadable or for other bytes it is ignored with a note ("ignored a bundle beside the file that is not for it"), and every existing sidecar is tried. This needs a `lenient()` hook on `Provider` (default false).
+- Checked after the fix: a unit test with a stale sidecar, one with a corrupt first sidecar and a valid second, and a CLI run with a stale `.sigstore` beside a file whose repo GitHub has no attestation for: exit 10 with the note, where `--bundle` with the same file still exits 13.
+- Status: issue #79, fixed in PR #86.
 
 ## 7. "Choose bundle..." reuses an existing sidecar
 
@@ -79,8 +81,9 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 - File: `crates/provenance-core/src/pe.rs`, `read_claim`.
 - Description: the string is looked up per language from `info.translation()`, which pelite 0.10.0 implements as a query of `\VarFileInfo\Translation` starting from an empty slice. A resource with a `StringFileInfo` table and no `VarFileInfo\Translation` yields no languages, so the claim is missed, against `project.md` ("any language").
 - Also: the ELF reader caps the value at 256 bytes as `project.md` says; the PE reader takes any length (and `valid_repo` had no limit, see 1).
-- Checked: read pelite's source; no PE without that table was built.
-- Status: issue #80, open.
+- Checked: pelite's source, then a fixture PE with a string table and no `VarFileInfo`: with the fix the claim is read; with the fallback disabled the same test fails with `None`.
+- Fix: if the languages `VarFileInfo\Translation` lists give no value, the string tables are searched in a fixed order; values over the limits (256 bytes for the claim, 512 for the bundle link, 64 for `ProductVersion`) are ignored, as the ELF reader already did.
+- Status: issue #80, fixed in PR #86.
 
 ## 9. Case-sensitive cache lookups
 

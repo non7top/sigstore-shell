@@ -54,6 +54,12 @@ impl ProviderError {
 pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Whether a bundle from this provider that does not verify is ignored with a note instead of
+    /// failing the lookup: true for one found by name beside the file, which nobody asked for.
+    fn lenient(&self) -> bool {
+        false
+    }
+
     /// `repo` is the `owner/repo` to ask about, if known.
     async fn fetch(&self, digest_hex: &str, repo: Option<&str>) -> Result<Fetched, ProviderError>;
 }

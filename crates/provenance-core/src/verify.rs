@@ -261,7 +261,11 @@ pub async fn verify_digest_keeping_bundle(
                     match verify_bundle(&verifier, digest, bundle) {
                         Ok(identity) => verified.push((i, identity)),
                         Err(e) => {
-                            invalid = true;
+                            // A bundle nobody asked for (found beside the file) that is not for these
+                            // bytes is noted below, not reported as a failed attestation.
+                            if !provider.lenient() {
+                                invalid = true;
+                            }
                             rejected.push(e);
                         }
                     }
@@ -293,10 +297,18 @@ pub async fn verify_digest_keeping_bundle(
                     return Ok((report, Some(fetched.bundles[i].clone())));
                 }
                 for e in rejected {
-                    report.notes.push(format!(
-                        "{}: attestation did not verify: {e}",
-                        provider.name()
-                    ));
+                    report.notes.push(if provider.lenient() {
+                        format!(
+                            "{}: ignored a bundle beside the file that is not for it: {e}",
+                            provider.name()
+                        )
+                    } else {
+                        format!("{}: attestation did not verify: {e}", provider.name())
+                    });
+                }
+                if provider.lenient() {
+                    answered_empty = true;
+                    report.searched.push(provider.name().to_string());
                 }
             }
         }
