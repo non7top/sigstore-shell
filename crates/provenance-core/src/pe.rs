@@ -2,46 +2,66 @@ use pelite::{pe32, pe64};
 
 use crate::claim_format::{PE_BUNDLE_KEY, PE_KEY};
 
+/// A usable value: not empty after trimming and within `max` bytes.
+fn usable(value: String, max: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max).then(|| value.to_string())
+}
+
 macro_rules! claim_from {
-    ($pe:ident, $image:expr, $key:expr) => {
+    ($pe:ident, $image:expr, $key:expr, $max:expr) => {
         (|| -> Result<Option<String>, String> {
             use $pe::Pe;
             let pe = $pe::PeFile::from_bytes($image).map_err(|e| e.to_string())?;
-            let mut found = None;
-            if let Some(info) = pe.resources().ok().and_then(|r| r.version_info().ok()) {
-                for lang in info.translation() {
-                    if let Some(value) = info.value(*lang, $key) {
-                        let value = value.trim().to_string();
-                        if !value.is_empty() {
-                            found = Some(value);
-                            break;
-                        }
-                    }
-                }
+            let Some(info) = pe.resources().ok().and_then(|r| r.version_info().ok()) else {
+                return Ok(None);
+            };
+            // The languages `VarFileInfo\Translation` lists come first; a resource without that table
+            // still has string tables, which are then searched in a fixed order.
+            let listed = info
+                .translation()
+                .iter()
+                .find_map(|lang| info.value(*lang, $key).and_then(|v| usable(v, $max)));
+            if listed.is_some() {
+                return Ok(listed);
             }
-            Ok(found)
+            let tables = info.file_info().strings;
+            let mut langs: Vec<_> = tables.keys().copied().collect();
+            langs.sort_by_key(|l| (l.lang_id, l.charset_id));
+            Ok(langs.iter().find_map(|lang| {
+                tables
+                    .get(lang)
+                    .and_then(|strings| strings.get($key))
+                    .and_then(|v| usable(v.clone(), $max))
+            }))
         })()
     };
 }
 
-fn read_string(image: &[u8], key: &str) -> Result<Option<String>, String> {
-    claim_from!(pe64, image, key).or_else(|first| claim_from!(pe32, image, key).map_err(|_| first))
+fn read_string(image: &[u8], key: &str, max: usize) -> Result<Option<String>, String> {
+    claim_from!(pe64, image, key, max)
+        .or_else(|first| claim_from!(pe32, image, key, max).map_err(|_| first))
 }
+
+/// The most a claim may hold, as in project.md; the same limit the ELF reader applies.
+const MAX_CLAIM: usize = 256;
+const MAX_BUNDLE_URL: usize = 512;
+const MAX_VERSION: usize = 64;
 
 /// Reads the `ProvenanceRepo` version-resource string. Pure parsing, so it works off Windows.
 /// `Ok(None)` means a valid PE without that string.
 pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
-    read_string(image, PE_KEY)
+    read_string(image, PE_KEY, MAX_CLAIM)
 }
 
 /// Reads the standard `ProductVersion` string that installer tooling fills in, with the same meaning of `Ok(None)`.
 pub fn read_product_version(image: &[u8]) -> Result<Option<String>, String> {
-    read_string(image, "ProductVersion")
+    read_string(image, "ProductVersion", MAX_VERSION)
 }
 
 /// Reads the optional `ProvenanceBundle` string, with the same meaning of `Ok(None)`.
 pub fn read_bundle_url(image: &[u8]) -> Result<Option<String>, String> {
-    read_string(image, PE_BUNDLE_KEY)
+    read_string(image, PE_BUNDLE_KEY, MAX_BUNDLE_URL)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -75,7 +95,7 @@ pub mod fixture {
         b
     }
 
-    fn version_info(strings: &[(&str, &str)]) -> Vec<u8> {
+    fn version_info(strings: &[(&str, &str)], with_translation: bool) -> Vec<u8> {
         let mut fixed = Vec::new();
         fixed.extend(0xFEEF_04BDu32.to_le_bytes());
         fixed.extend(0x0001_0000u32.to_le_bytes());
@@ -92,13 +112,12 @@ pub mod fixture {
         let string_file_info = block("StringFileInfo", &[], 0, 1, &[table]);
         let translation = block("Translation", &[0x09, 0x04, 0xb0, 0x04], 4, 0, &[]);
         let var_file_info = block("VarFileInfo", &[], 0, 1, &[translation]);
-        block(
-            "VS_VERSION_INFO",
-            &fixed,
-            52,
-            0,
-            &[string_file_info, var_file_info],
-        )
+        let children = if with_translation {
+            vec![string_file_info, var_file_info]
+        } else {
+            vec![string_file_info]
+        };
+        block("VS_VERSION_INFO", &fixed, 52, 0, &children)
     }
 
     fn dir(entry_id: u32, target: u32) -> Vec<u8> {
@@ -112,11 +131,21 @@ pub mod fixture {
 
     /// A minimal PE32+ whose only content is a version resource with the given strings.
     pub fn pe_with_version_strings(strings: &[(&str, &str)]) -> Vec<u8> {
+        pe_with_table(strings, true)
+    }
+
+    /// Like [`pe_with_version_strings`] but with no `VarFileInfo\Translation` table, as some resource
+    /// compilers write.
+    pub fn pe_with_version_strings_and_no_translation(strings: &[(&str, &str)]) -> Vec<u8> {
+        pe_with_table(strings, false)
+    }
+
+    fn pe_with_table(strings: &[(&str, &str)], with_translation: bool) -> Vec<u8> {
         const SECTION_RVA: u32 = 0x1000;
         const RAW_OFFSET: usize = 0x200;
         const DATA_OFFSET: u32 = 0x58;
 
-        let info = version_info(strings);
+        let info = version_info(strings, with_translation);
         let mut rsrc = Vec::new();
         rsrc.extend(dir(16, 0x8000_0000 | 0x18));
         rsrc.extend(dir(1, 0x8000_0000 | 0x30));
@@ -191,5 +220,52 @@ mod tests {
     fn missing_key_is_none() {
         let pe = pe_with_version_strings(&[("ProductName", "Demo")]);
         assert_eq!(read_claim(&pe).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod table_and_limit_tests {
+    use super::fixture::{pe_with_version_strings, pe_with_version_strings_and_no_translation};
+    use super::*;
+
+    #[test]
+    fn the_claim_is_found_without_a_translation_table() {
+        let pe = pe_with_version_strings_and_no_translation(&[
+            ("ProvenanceRepo", "o/r"),
+            ("ProductVersion", "1.2.3"),
+        ]);
+        assert_eq!(read_claim(&pe).unwrap().as_deref(), Some("o/r"));
+        assert_eq!(read_product_version(&pe).unwrap().as_deref(), Some("1.2.3"));
+        let listed = pe_with_version_strings(&[("ProvenanceRepo", "o/r")]);
+        assert_eq!(read_claim(&listed).unwrap().as_deref(), Some("o/r"));
+        let none = pe_with_version_strings_and_no_translation(&[("ProductName", "x")]);
+        assert_eq!(read_claim(&none).unwrap(), None);
+    }
+
+    #[test]
+    fn values_over_the_limits_are_ignored_and_values_at_the_limits_are_read() {
+        for (key, max, read) in [
+            (
+                PE_KEY,
+                MAX_CLAIM,
+                read_claim as fn(&[u8]) -> Result<Option<String>, String>,
+            ),
+            (PE_BUNDLE_KEY, MAX_BUNDLE_URL, read_bundle_url),
+            ("ProductVersion", MAX_VERSION, read_product_version),
+        ] {
+            let at_limit = "a".repeat(max);
+            let over = "a".repeat(max + 1);
+            for build in [
+                pe_with_version_strings,
+                pe_with_version_strings_and_no_translation,
+            ] {
+                assert_eq!(
+                    read(&build(&[(key, &at_limit)])).unwrap(),
+                    Some(at_limit.clone()),
+                    "{key}"
+                );
+                assert_eq!(read(&build(&[(key, &over)])).unwrap(), None, "{key}");
+            }
+        }
     }
 }
