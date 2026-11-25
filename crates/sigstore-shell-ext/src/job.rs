@@ -212,6 +212,10 @@ fn remember(cache: &Cache, report: &Report, bundle: Option<&provenance_core::Bun
                 report.provider.as_deref(),
                 Some("bundle-file" | "web-bundle")
             ) => {}
+        // Only GitHub's answer is scoped to the claimed repo. A mismatch from Rekor may be another
+        // identity's signature on the same bytes, and keeping it would hide a genuine attestation
+        // published later for as long as the entry lives.
+        (Status::Mismatch, _) if report.provider.as_deref() != Some("github") => {}
         (Status::Verified | Status::Mismatch, Some(bundle)) => {
             let _ = cache.put(
                 &report.file_sha256,
@@ -793,6 +797,41 @@ mod tests {
         }
         async fn fetch(&self, _: &str, _: Option<&str>) -> Result<Fetched, ProviderError> {
             serves_the_bundle()
+        }
+    }
+
+    /// Answers with the fixture bundle under the name of a real provider.
+    struct Serves(&'static str);
+
+    #[async_trait::async_trait]
+    impl Provider for Serves {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        async fn fetch(&self, _: &str, _: Option<&str>) -> Result<Fetched, ProviderError> {
+            serves_the_bundle()
+        }
+    }
+
+    #[test]
+    fn only_a_mismatch_from_github_is_cached_and_a_verified_result_from_anywhere_is() {
+        for (provider, claim, status, stored) in [
+            ("github", "evil/repo", Status::Mismatch, true),
+            ("rekor-v1", "evil/repo", Status::Mismatch, false),
+            ("rekor-v1", "cli/cli", Status::Verified, true),
+            ("github", "cli/cli", Status::Verified, true),
+        ] {
+            let dir = tmp(&format!("mismatch-{provider}-{claim}").replace('/', "_"));
+            let cache = Cache::new(dir.join("cache"));
+            let providers: Vec<Box<dyn Provider>> = vec![Box::new(Serves(provider))];
+            let r = resolve_with(SHA, Some(claim), true, &cache, &providers, root);
+            assert_eq!(r.status, status, "{provider} {claim}");
+            assert_eq!(
+                entry_file(&dir.join("cache"), SHA).exists(),
+                stored,
+                "{provider} {claim}"
+            );
+            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 

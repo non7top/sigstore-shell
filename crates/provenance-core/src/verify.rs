@@ -340,20 +340,33 @@ fn pick_match(repos: &[Option<&str>], expected: Option<&str>) -> Option<usize> {
 /// A verified result says two things: the file's hash is the one attested (unchanged), and the
 /// certificate names the builder (came from there). `claimed` is the repo the file or the user named.
 pub fn verdict_text(report: &Report, claimed: Option<&str>) -> Option<String> {
-    let built_by = report
+    let repo = report.identity.as_ref().and_then(|i| i.repo.as_deref());
+    let signer = report
         .identity
         .as_ref()
-        .and_then(|i| i.repo.as_deref())
+        .and_then(|i| i.san.as_deref())
         .unwrap_or("the signer shown below");
     match report.status {
-        Status::Verified => Some(format!(
-            "Verified: this file is unchanged since it was built, and it was built by {built_by}."
-        )),
+        // Only a certificate that names a repository says where the file was built; one from a
+        // personal identity is a signature on these bytes and nothing more.
+        Status::Verified => Some(match repo {
+            Some(repo) => format!(
+                "Verified: this file is unchanged since it was built, and it was built by {repo}."
+            ),
+            None => format!(
+                "Signed by {signer}. This is a signature on this file, not build provenance."
+            ),
+        }),
         Status::Mismatch => {
             let claimed = claimed.or(report.queried_repo.as_deref()).unwrap_or("?");
-            Some(format!(
-                "Mismatch: this file is unchanged since it was built, but it was built by {built_by}, not {claimed}."
-            ))
+            Some(match repo {
+                Some(repo) => format!(
+                    "Mismatch: this file is unchanged since it was built, but it was built by {repo}, not {claimed}."
+                ),
+                None => format!(
+                    "Mismatch: this file is signed by {signer}, which names no repository, not {claimed}."
+                ),
+            })
         }
         Status::NoAttestation => {
             let places: Vec<String> = report
@@ -668,6 +681,59 @@ mod tests {
         };
         let text = verdict_text(&github, None).unwrap();
         assert!(text.contains("Searched GitHub for cli/cli and the Rekor v1 log;"));
+    }
+
+    fn report_with(status: Status, repo: Option<&str>, san: Option<&str>) -> Report {
+        Report {
+            status,
+            file_sha256: String::new(),
+            claimed_repo: None,
+            queried_repo: Some("o/r".into()),
+            provider: Some("rekor-v1".into()),
+            identity: Some(crate::Identity {
+                repo: repo.map(str::to_string),
+                san: san.map(str::to_string),
+                ..crate::Identity::default()
+            }),
+            attestation_id: None,
+            log_index: None,
+            rate_limit: None,
+            trust_root: TrustRootSource::Embedded,
+            notes: vec![],
+            searched: vec![],
+        }
+    }
+
+    #[test]
+    fn a_personal_signature_is_not_described_as_a_build() {
+        let verified = report_with(Status::Verified, None, Some("someone@example.org"));
+        assert_eq!(
+            verdict_text(&verified, None).unwrap(),
+            "Signed by someone@example.org. This is a signature on this file, not build provenance."
+        );
+        let anonymous = report_with(Status::Verified, None, None);
+        assert!(verdict_text(&anonymous, None)
+            .unwrap()
+            .starts_with("Signed by the signer shown below."));
+        let mismatch = report_with(Status::Mismatch, None, Some("someone@example.org"));
+        let text = verdict_text(&mismatch, Some("o/r")).unwrap();
+        assert!(
+            text.contains("signed by someone@example.org") && text.contains("names no repository")
+        );
+        assert!(!text.contains("built by"), "{text}");
+    }
+
+    #[test]
+    fn a_certificate_with_a_repo_still_says_built_by() {
+        let r = report_with(
+            Status::Verified,
+            Some("o/r"),
+            Some("https://github.com/o/r/.github/workflows/x.yml@refs/heads/master"),
+        );
+        assert_eq!(
+            verdict_text(&r, None).unwrap(),
+            "Verified: this file is unchanged since it was built, and it was built by o/r."
+        );
     }
 
     #[test]

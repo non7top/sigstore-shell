@@ -9,10 +9,10 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 | 1 | `valid_repo` accepts `..` and has no length limit | confirmed, low impact | [#75](https://github.com/non7top/sigstore-shell/issues/75) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
 | 2 | A failed bundle download is reported as "No attestation found" | confirmed | [#76](https://github.com/non7top/sigstore-shell/issues/76) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
 | 3 | The first verified bundle ends the search | confirmed, fails in the safe direction | [#77](https://github.com/non7top/sigstore-shell/issues/77) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
-| 4 | A verified result without a repo shows green and "built by the signer shown below" | confirmed in code, wording question | [#78](https://github.com/non7top/sigstore-shell/issues/78) | open |
-| 5 | Mismatched attestations are cached for 7 days | overstated | none | none |
+| 4 | A verified result without a repo shows green and "built by the signer shown below" | confirmed, an outcome problem and not only wording | [#78](https://github.com/non7top/sigstore-shell/issues/78) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
+| 5 | Mismatched attestations are cached for 7 days | overstated as written, real for a Rekor mismatch | [#84](https://github.com/non7top/sigstore-shell/issues/84) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
 | 6 | A stale sidecar turns "No attestation" into "Verification failed"; only the first sidecar is tried | confirmed, partly by design | [#79](https://github.com/non7top/sigstore-shell/issues/79) | open |
-| 7 | "Choose bundle..." reuses an existing sidecar | documented behaviour | none | none |
+| 7 | "Choose bundle..." reuses an existing sidecar | a limitation, documented but wrong | [#83](https://github.com/non7top/sigstore-shell/issues/83) | [#85](https://github.com/non7top/sigstore-shell/pull/85) |
 | 8 | PE claim needs `VarFileInfo\Translation`, no size limit | confirmed from pelite's source | [#80](https://github.com/non7top/sigstore-shell/issues/80) | open (touches `pe.rs`, changed by #69 and #72) |
 | 9 | Case-sensitive cache repo comparison | not reachable | none | none |
 | 10 | Unbounded download and decompression in `download_bundle` | confirmed, low risk | [#81](https://github.com/non7top/sigstore-shell/issues/81) | [#82](https://github.com/non7top/sigstore-shell/pull/82) |
@@ -48,14 +48,16 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 - Description: with no embedded claim and no `--repo`, nothing is expected, so any bundle that verifies for the file's hash is `Verified`. The tab sets the green outcome, and the headline says "Verified: this file is unchanged since it was built, and it was built by the signer shown below."
 - Impact: for a bundle from `cosign sign-blob` with a personal e-mail identity there is no build provenance, only a signature, yet the text says it was built by that signer. The repo row stays on "No provenance information in this file" next to the green mark.
 - Checked: read the code only; not run with an e-mail-signed bundle.
-- Status: issue #78, open. Question: neutral outcome and wording when the certificate has no repo?
+- Decision (agreed in review): this is an outcome problem, not wording. A certificate with no repo gets a neutral outcome and the headline "Signed by <signer>. This is a signature on this file, not build provenance."; a certificate that names a repo stays green even when the file has no claim, since it says which workflow built the file. The status stays `verified`.
+- Status: issue #78, fixed in PR #85.
 
 ## 5. Mismatched attestations are cached for 7 days
 
 - File: `crates/sigstore-shell-ext/src/job.rs`, `remember`.
 - Description: `remember` stores both `Verified` and `Mismatch` results.
-- Verdict: overstated. A cache hit re-verifies the bundle offline and rebuilds the report, comparing the identity with the file's current claim, so the status is recomputed each time. The tab also offers "Check online" (skips the cache) and "Clear cache". It is not "locked until cleared".
-- Status: no issue.
+- Verdict: overstated as first written, but a narrower problem is real. A cache hit re-verifies the bundle offline and rebuilds the report against the file's current claim, so the status is recomputed each time, and the tab offers "Check online" and "Clear cache". A check made before any attestation exists ends as `NoAttestation`, which removes the entry, so it does not poison the cache. What is real: a Mismatch from a provider that is not scoped to the claimed repo (Rekor) stores a foreign identity's bundle, and a genuine attestation published later stays hidden for up to 7 days.
+- Decision (agreed in review): do not cache a Mismatch unless GitHub returned it; GitHub's is scoped to the claimed repo and stable (for example after a rename), and caching it keeps unauthenticated users under the 60 requests per hour limit. Verified results from any provider stay cached. Since #82 every returned bundle is checked before a mismatch is chosen.
+- Status: issue #84, fixed in PR #85.
 
 ## 6. A stale sidecar turns "No attestation" into "Verification failed"
 
@@ -68,8 +70,9 @@ Findings from an exploration of the sigstore-shell codebase: bugs, inconsistent 
 ## 7. "Choose bundle..." reuses an existing sidecar
 
 - File: `crates/sigstore-shell-ext/src/page.rs`, `choose_bundle`.
-- Verdict: documented behaviour (`docs/details.md`, "Bundle file...", and the doc comment on `choose_bundle`): the button uses the bundle beside the file if there is one and opens a file picker otherwise. A UX limitation, not a bug; the user cannot pick a different bundle while a sidecar exists.
-- Status: no issue.
+- Verdict: documented, and still a defect. A button that asks the user to choose a bundle must let them choose: with a stale or corrupt sidecar beside the file the user could not select a valid bundle from elsewhere. The sidecar is already tried automatically on Verify.
+- Decision (agreed in review): the button always opens the file picker, starting in the file's folder.
+- Status: issue #83, fixed in PR #85.
 
 ## 8. The PE claim needs `VarFileInfo\Translation`, and has no size limit
 
