@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.0](https://github.com/non7top/sigstore-shell/compare/v0.2.0...v0.3.0) (2026-11-25)
+
+
+### Features
+
+* **build:** report the release version and commit in every binary ([d318336](https://github.com/non7top/sigstore-shell/commit/d318336f62abc6d3698a4085d8df95129bbd6845))
+* **ext:** Bundle file button uses the bundle beside the file, else opens a file picker ([c3347e6](https://github.com/non7top/sigstore-shell/commit/c3347e6a25e29b7bb21b37ec657f02d398240933))
+* **ext:** Bundle file button uses the bundle beside the file, else opens a file picker ([65439a1](https://github.com/non7top/sigstore-shell/commit/65439a18b06997bf31aae24dfef40884400df67f))
+* result wording states unchanged and built-by, and what no attestation cannot tell ([5f4448e](https://github.com/non7top/sigstore-shell/commit/5f4448e5bf83a0277067f0b592239d3241fa5f48))
+* result wording states unchanged and built-by, and what no attestation cannot tell ([f9758b6](https://github.com/non7top/sigstore-shell/commit/f9758b60736ab8791f886b07ee6f99f28cab4f8a))
+* **scoop:** add a Scoop bucket, a reusable Scoop workflow and build version and commit in every binary ([db27905](https://github.com/non7top/sigstore-shell/commit/db279055671c020f55fe60122d0578dd961dfb1b))
+* **scoop:** add a Scoop manifest for sigstore-shell-cli ([9d1163d](https://github.com/non7top/sigstore-shell/commit/9d1163dbd7c76f6495c460ab1bc07eb0aa5afd7b))
+* verify against a bundle file, explicit with --bundle or beside the file ([ae6687b](https://github.com/non7top/sigstore-shell/commit/ae6687bfb0ceb2525bfa726881bcd645fc3fce58))
+
+
+### Bug Fixes
+
+* **ext:** keep the consent text as it was, its longer form left stale pixels under the links ([0d4fcb3](https://github.com/non7top/sigstore-shell/commit/0d4fcb3dfa1ed0282dbd1878b69cb3c194c9db27))
+* keep the checkpoint dash in the bundle fixture JSON-escaped so hooks leave it alone ([8dc34bd](https://github.com/non7top/sigstore-shell/commit/8dc34bd714b6b67250094f6be81d0bb1886269f3))
+
+
+### Dependencies
+
+* bump sigstore/cosign-installer ([643f3dc](https://github.com/non7top/sigstore-shell/commit/643f3dcec1714bbae99af9d11dfe65bc8daa3d17))
+* bump the cargo group across 1 directory with 3 updates ([82eef1f](https://github.com/non7top/sigstore-shell/commit/82eef1ff689916ab9ae8ff4c7fe7dcef6434ebb1))
+
 ## [0.2.0](https://github.com/non7top/sigstore-shell/compare/v0.1.0...v0.2.0) (2026-11-05)
 
 
