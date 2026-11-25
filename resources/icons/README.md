@@ -22,7 +22,7 @@ The file is included unmodified. The licence statement rests on that metadata an
 
 ## Our own icons
 
-`failed.svg`, `neutral.svg` and `warning.svg` are drawn for this project and released under the project's MIT licence.
+`failed.svg`, `neutral.svg` and `warning.svg` are drawn for this project and released under the project's Apache-2.0 licence.
 
 ## How they get into the DLL
 

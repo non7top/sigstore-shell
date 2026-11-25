@@ -28,7 +28,7 @@ VIAddVersionKey /LANG=1033 "ProductName" "${NAME}"
 VIAddVersionKey /LANG=1033 "FileDescription" "${NAME} installer"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}"
-VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
+VIAddVersionKey /LANG=1033 "LegalCopyright" "Apache License 2.0"
 !ifdef COMMIT
   VIAddVersionKey /LANG=1033 "BuildCommit" "${COMMIT}"
 !endif
