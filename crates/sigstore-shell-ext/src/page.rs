@@ -13,7 +13,7 @@ use crate::links::{
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
-use provenance_core::{read_bundle_url_file, read_claim_file, BundleFile, WebBundle};
+use provenance_core::{bundle_link_file, read_claim_file, BundleFile, WebBundle};
 use std::cell::{Cell, RefCell};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -856,7 +856,7 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
         ui.rekor = settings.rekor;
         ui.web_bundle = settings
             .web_bundle
-            .then(|| read_bundle_url_file(&data.path).ok().flatten())
+            .then(|| bundle_link_file(&data.path))
             .flatten()
             .and_then(|url| {
                 let host = WebBundle::new(&url).ok()?.host().to_string();

@@ -2,7 +2,7 @@ include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
 
 use clap::Parser;
 use provenance_core::{
-    load_trusted_root, read_bundle_url_file, verdict_text, verify_file, BundleFile, GithubProvider,
+    bundle_link_file, load_trusted_root, verdict_text, verify_file, BundleFile, GithubProvider,
     Options, Provider, RekorProvider, Report, Status, WebBundle,
 };
 use std::path::PathBuf;
@@ -142,8 +142,8 @@ async fn run() -> Result<u8, String> {
         }
     }
     if web_bundle {
-        match read_bundle_url_file(&file) {
-            Ok(Some(url)) => match WebBundle::new(&url) {
+        match bundle_link_file(&file) {
+            Some(url) => match WebBundle::new(&url) {
                 Ok(web) => {
                     eprintln!(
                         "note: --web-bundle downloads a bundle from {} only if the lookups before it do not verify the file",
@@ -153,7 +153,7 @@ async fn run() -> Result<u8, String> {
                 }
                 Err(e) => eprintln!("note: --web-bundle skipped, the file's link is unusable: {e}"),
             },
-            _ => eprintln!("note: --web-bundle skipped, the file embeds no bundle link"),
+            None => eprintln!("note: --web-bundle skipped, the file has no bundle link to try"),
         }
     }
     if rekor {
