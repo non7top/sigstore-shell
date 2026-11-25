@@ -13,7 +13,7 @@ use crate::links::{
 use crate::model::{view_in, Claim, Env, Event, Outcome, Rate, State, Tone, View};
 use crate::settings::{app_dir, Settings};
 use crate::worker::{self, JobCtx};
-use provenance_core::{bundle_link_file, read_claim_file, BundleFile, WebBundle};
+use provenance_core::{bundle_link_file, read_claim_file, WebBundle};
 use std::cell::{Cell, RefCell};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -1017,11 +1017,8 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
-/// The bundle file beside the file if there is one, else one the user picks; `None` if they cancel.
+/// Always asks the user (a bundle beside the file is tried by Verify anyway); `None` if they cancel.
 unsafe fn choose_bundle(hwnd: HWND, file: &Path) -> Option<PathBuf> {
-    if let Some(beside) = BundleFile::beside(file) {
-        return Some(beside.path().to_path_buf());
-    }
     let filter: Vec<u16> = "Sigstore bundles\0*.sigstore;*.bundle;*.json\0All files\0*.*\0\0"
         .encode_utf16()
         .collect();
