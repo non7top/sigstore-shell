@@ -25,7 +25,7 @@ sigstore-rekor = "0.16"
 thiserror = "2"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
 
 [[example]]
 name = "fixture_exe"

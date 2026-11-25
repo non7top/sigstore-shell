@@ -3,7 +3,7 @@ include!(concat!(env!("OUT_DIR"), "/elf_claim.rs"));
 use clap::Parser;
 use provenance_core::{
     load_trusted_root, verdict_text, verify_file, BundleFile, GithubProvider, Options, Provider,
-    RekorProvider, Report, Status,
+    RekorProvider, Report, Status, WebBundle,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,6 +23,9 @@ enum Cli {
         /// Verify against this bundle file instead of asking GitHub (no network lookup)
         #[arg(long)]
         bundle: Option<PathBuf>,
+        /// Verify against a bundle downloaded from this https URL instead of asking GitHub (sends a request to that host)
+        #[arg(long)]
+        bundle_url: Option<String>,
         /// Also search the public Rekor v1 log by hash (sends the hash to a second service)
         #[arg(long)]
         rekor: bool,
@@ -53,7 +56,8 @@ fn print_text(report: &Report) {
         }
         Status::VerificationFailed => "ATTESTATION DID NOT VERIFY".to_string(),
         Status::NotChecked => {
-            "NOT CHECKED (no repo to ask about; pass --repo, --bundle or --rekor)".to_string()
+            "NOT CHECKED (no repo to ask about; pass --repo, --bundle, --bundle-url or --rekor)"
+                .to_string()
         }
     };
     println!("{headline}");
@@ -109,6 +113,7 @@ async fn run() -> Result<u8, String> {
         file,
         repo,
         bundle,
+        bundle_url,
         rekor,
         json,
     } = Cli::parse();
@@ -117,13 +122,19 @@ async fn run() -> Result<u8, String> {
         .filter(|t| !t.is_empty())
         .or_else(|| std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()));
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    match bundle {
-        Some(path) => providers.push(Box::new(BundleFile::new(path))),
-        None => {
-            providers.push(Box::new(GithubProvider::new(token)));
-            if let Some(sidecar) = BundleFile::beside(&file) {
-                providers.push(Box::new(sidecar));
-            }
+    let explicit = bundle.is_some() || bundle_url.is_some();
+    if let Some(path) = bundle {
+        providers.push(Box::new(BundleFile::new(path)));
+    }
+    if let Some(url) = bundle_url {
+        let web = WebBundle::new(&url)?;
+        eprintln!("note: downloading the bundle from {}", web.host());
+        providers.push(Box::new(web));
+    }
+    if !explicit {
+        providers.push(Box::new(GithubProvider::new(token)));
+        if let Some(sidecar) = BundleFile::beside(&file) {
+            providers.push(Box::new(sidecar));
         }
     }
     if rekor {
