@@ -1,4 +1,4 @@
-; Built with `make installer`. Defines: VERSION, VERSION_NUMERIC (x.y.z.w), OUTFILE; PROVENANCE_REPO only for release builds.
+; Built with `make installer`. Defines: VERSION, VERSION_NUMERIC (x.y.z.w), OUTFILE; COMMIT when known; PROVENANCE_REPO only for release builds.
 !include "x64.nsh"
 !include "MUI2.nsh"
 
@@ -29,6 +29,9 @@ VIAddVersionKey /LANG=1033 "FileDescription" "${NAME} installer"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
+!ifdef COMMIT
+  VIAddVersionKey /LANG=1033 "BuildCommit" "${COMMIT}"
+!endif
 ; Absent on local builds, so they make no claim about where they came from.
 !ifdef PROVENANCE_REPO
   VIAddVersionKey /LANG=1033 "ProvenanceRepo" "${PROVENANCE_REPO}"
@@ -76,6 +79,9 @@ Section "Install"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${NAME}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
+!ifdef COMMIT
+  WriteRegStr HKLM "${UNINST_KEY}" "BuildCommit" "${COMMIT}"
+!endif
   WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "non7top"
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\uninstall.exe"

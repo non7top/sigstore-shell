@@ -1,0 +1,44 @@
+name: scoop-bucket
+
+# Calls the reusable scoop.yml in this repo for the manifest in bucket/.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'bucket/**'
+      - '.github/workflows/scoop*.yml'
+      - 'scripts/scoop-smoke.ps1'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'bucket/**'
+      - '.github/workflows/scoop*.yml'
+      - 'scripts/scoop-smoke.ps1'
+  schedule:
+    # Every 4 hours, as in ScoopInstaller/BucketTemplate; release assets appear after the release is created.
+    - cron: '20 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    uses: ./.github/workflows/scoop.yml
+    # A called workflow's jobs, skipped ones included, may not ask for more than the caller job allows.
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      smoke-script: scripts/scoop-smoke.ps1
+
+  autoupdate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/scoop.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      test: false
+      autoupdate: true

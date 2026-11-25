@@ -1,0 +1,2 @@
+# Scoop's own file tests require CRLF in bucket manifests.
+bucket/*.json text eol=crlf

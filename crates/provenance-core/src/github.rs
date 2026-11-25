@@ -59,7 +59,13 @@ impl GithubProvider {
 
     pub fn with_base(token: Option<String>, base: &str) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("sigstore-shell/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!(
+                "sigstore-shell/",
+                env!("SIGSTORE_SHELL_VERSION"),
+                " (commit ",
+                env!("SIGSTORE_SHELL_COMMIT"),
+                ")"
+            ))
             .build()
             .expect("static client config");
         Self {

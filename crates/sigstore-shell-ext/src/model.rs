@@ -475,6 +475,10 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
         rows.push(("Answered by".into(), provider_label(p).into()));
     }
     rows.push(("SHA-256".into(), report.file_sha256.clone()));
+    rows.push((
+        "Checked with".into(),
+        format!("sigstore-shell {}", provenance_core::VERSION_LONG),
+    ));
     Done {
         outcome,
         headline,

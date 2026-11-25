@@ -44,6 +44,25 @@ sigstore-shell-cli verify app.exe
 
 Install the Explorer tab on Windows by running `sigstore-shell-Setup-<version>.exe` from the release, or `register.ps1` from the release zip as administrator (`INSTALL.md` is in the zip). Releases are attested and cosign-signed (from the first one on); check a file with `gh attestation verify <file> --repo non7top/sigstore-shell`.
 
+## Install the CLI only
+
+On Windows with [Scoop](https://scoop.sh):
+
+```sh
+scoop bucket add sigstore-shell https://github.com/non7top/sigstore-shell
+scoop install sigstore-shell/sigstore-shell-cli
+```
+
+Or download `sigstore-shell-cli.exe` (Windows x86-64) or `sigstore-shell-cli` (Linux x86-64) from the [releases page](https://github.com/non7top/sigstore-shell/releases). There is no arm64 or macOS build. The CLI cannot vouch for its own first download, so check it once with GitHub's own tool, using a `gh` that is logged in:
+
+```sh
+gh attestation verify sigstore-shell-cli.exe --repo non7top/sigstore-shell
+```
+
+Each release file also has a keyless cosign signature in a `.cosign.bundle` file next to it; the commands are in [Download and verify a release](docs/details.md#download-and-verify-a-release). `sigstore-shell-cli --version` prints the release version and the commit it was built from.
+
+Exit codes: 0 verified, 10 no attestation, 11 mismatch, 12 lookup failed, 13 verification failed, 14 not checked. What each means is in the [table in docs/details.md](docs/details.md#command-line). Without `GH_TOKEN` or `GITHUB_TOKEN` the GitHub API allows 60 requests per hour per IP address.
+
 ## Status
 
 Early development. Releases are on the [releases page](https://github.com/non7top/sigstore-shell/releases). The CLI is tested against real attested releases. The Explorer tab is smoke-tested under Wine and has been run in real Explorer on Windows (screenshot above). The Windows version and display scaling of that run were not recorded, so Windows 10 and other scalings are untested. The DLL is not Authenticode-signed. Details: [docs/details.md](docs/details.md); design: [project.md](project.md).

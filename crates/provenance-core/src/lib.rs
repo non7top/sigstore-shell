@@ -32,6 +32,18 @@ pub use verify::{
     verify_digest_keeping_bundle, verify_file, Options, Report, Status, TrustRootSource,
 };
 
+/// The release version, from RELEASE_VERSION at build time (the crate version for a local build).
+pub const VERSION: &str = env!("SIGSTORE_SHELL_VERSION");
+/// The commit the binary was built from, or "unknown".
+pub const COMMIT: &str = env!("SIGSTORE_SHELL_COMMIT");
+/// What `--version` prints after the program name.
+pub const VERSION_LONG: &str = concat!(
+    env!("SIGSTORE_SHELL_VERSION"),
+    " (commit ",
+    env!("SIGSTORE_SHELL_COMMIT"),
+    ")"
+);
+
 use sha2::{Digest, Sha256};
 use std::io;
 use std::path::Path;
