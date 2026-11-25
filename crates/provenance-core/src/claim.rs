@@ -35,6 +35,22 @@ pub fn read_bundle_url_file(path: &std::path::Path) -> Result<Option<String>, Cl
     read_bundle_url(map.as_ref())
 }
 
+/// The bundle link to try for a file: the one it embeds, else, for a PE with a repo claim and a
+/// `ProductVersion`, the usual release URL guessed from them (see [`guess_release_bundle_url`]).
+pub fn bundle_link_file(path: &std::path::Path) -> Option<String> {
+    let map = pelite::FileMap::open(path).ok()?;
+    let image = map.as_ref();
+    if let Ok(Some(url)) = read_bundle_url(image) {
+        return Some(url);
+    }
+    if !image.starts_with(b"MZ") {
+        return None;
+    }
+    let repo = pe::read_claim(image).ok()??;
+    let version = pe::read_product_version(image).ok()??;
+    crate::web_bundle::guess_release_bundle_url(&repo, &version, path.file_name()?.to_str()?)
+}
+
 /// Like [`read_claim`] but maps the file instead of reading it, so a large exe is not loaded.
 pub fn read_claim_file(path: &std::path::Path) -> Result<Option<String>, ClaimError> {
     let map =
@@ -67,6 +83,49 @@ mod tests {
         let none = pe_with_version_strings(&[("ProvenanceRepo", "o/r")]);
         assert_eq!(read_bundle_url(&none).unwrap(), None);
         assert_eq!(read_bundle_url(b"hello").unwrap(), None);
+    }
+
+    #[test]
+    fn the_embedded_link_wins_over_the_guess_and_only_a_pe_with_a_repo_is_guessed() {
+        let dir = std::env::temp_dir().join(format!("pc-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = "https://example.org/x.cosign.bundle";
+        let write = |name: &str, bytes: Vec<u8>| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let both = write(
+            "a.exe",
+            pe_with_version_strings(&[
+                ("ProvenanceRepo", "o/r"),
+                ("ProductVersion", "1.2.3"),
+                ("ProvenanceBundle", link),
+            ]),
+        );
+        assert_eq!(bundle_link_file(&both).as_deref(), Some(link));
+        let guess = write(
+            "b.exe",
+            pe_with_version_strings(&[("ProvenanceRepo", "o/r"), ("ProductVersion", "1.2.3")]),
+        );
+        assert_eq!(
+            bundle_link_file(&guess).as_deref(),
+            Some("https://github.com/o/r/releases/download/v1.2.3/b.exe.cosign.bundle")
+        );
+        let no_repo = write(
+            "c.exe",
+            pe_with_version_strings(&[("ProductVersion", "1.2.3")]),
+        );
+        assert_eq!(bundle_link_file(&no_repo), None);
+        let no_version = write(
+            "d.exe",
+            pe_with_version_strings(&[("ProvenanceRepo", "o/r")]),
+        );
+        assert_eq!(bundle_link_file(&no_version), None);
+        let elf = write("e", elf_with_claim(Some("o/r")));
+        assert_eq!(bundle_link_file(&elf), None);
+        assert_eq!(bundle_link_file(&dir.join("missing.exe")), None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

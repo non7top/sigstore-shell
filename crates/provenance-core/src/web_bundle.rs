@@ -96,6 +96,33 @@ impl WebBundle {
     }
 }
 
+/// Where a GitHub release usually keeps the bundle of one of its files, guessed from the repo the file
+/// claims, its `ProductVersion` and its file name: `releases/download/v<version>/<name>.cosign.bundle`.
+/// A hint that is wrong for a renamed file or another tag style; the download is verified like any other.
+pub fn guess_release_bundle_url(
+    repo: &str,
+    product_version: &str,
+    file_name: &str,
+) -> Option<String> {
+    let version_ok = product_version.len() <= 64
+        && product_version.starts_with(|c: char| c.is_ascii_digit())
+        && product_version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_'));
+    if !crate::valid_repo(repo) || !version_ok || file_name.is_empty() {
+        return None;
+    }
+    let mut url = Url::parse(&format!(
+        "https://github.com/{repo}/releases/download/v{product_version}/"
+    ))
+    .ok()?;
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .push(&format!("{file_name}.cosign.bundle"));
+    Some(url.to_string())
+}
+
 fn scheme_allowed(url: &Url, https_only: bool) -> bool {
     url.scheme() == "https" || (!https_only && url.scheme() == "http")
 }
@@ -184,6 +211,41 @@ mod tests {
         ] {
             assert!(WebBundle::new(url).is_err(), "{url}");
         }
+    }
+
+    #[test]
+    fn the_release_bundle_url_is_guessed_from_repo_version_and_name() {
+        assert_eq!(
+            guess_release_bundle_url("non7top/sigstore-shell", "0.3.0", "sigstore-shell-cli.exe"),
+            Some("https://github.com/non7top/sigstore-shell/releases/download/v0.3.0/sigstore-shell-cli.exe.cosign.bundle".into())
+        );
+        let spaced = guess_release_bundle_url("o/r", "1.2.3-rc1", "my app (1)#x?.exe").unwrap();
+        assert!(
+            spaced.ends_with("/v1.2.3-rc1/my%20app%20(1)%23x%3F.exe.cosign.bundle"),
+            "{spaced}"
+        );
+        assert!(WebBundle::new(&spaced).is_ok());
+    }
+
+    #[test]
+    fn nothing_odd_makes_it_into_a_guessed_url() {
+        for (repo, version, name) in [
+            ("not a repo", "1.0", "a.exe"),
+            ("o/r", "", "a.exe"),
+            ("o/r", "v1.0", "a.exe"),
+            ("o/r", "1.0/../x", "a.exe"),
+            ("o/r", "1.0 beta", "a.exe"),
+            ("o/r", "1.0", ""),
+            ("o/r", &"1".repeat(65), "a.exe"),
+        ] {
+            assert_eq!(
+                guess_release_bundle_url(repo, version, name),
+                None,
+                "{repo} {version} {name}"
+            );
+        }
+        let slash = guess_release_bundle_url("o/r", "1.0", "../a.exe").unwrap();
+        assert!(slash.ends_with("/v1.0/..%2Fa.exe.cosign.bundle"), "{slash}");
     }
 
     #[test]

@@ -17,7 +17,10 @@ mod web_bundle;
 mod zone;
 
 pub use bundle_file::BundleFile;
-pub use claim::{read_bundle_url, read_bundle_url_file, read_claim, read_claim_file, ClaimError};
+pub use claim::{
+    bundle_link_file, read_bundle_url, read_bundle_url_file, read_claim, read_claim_file,
+    ClaimError,
+};
 pub use claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE, ELF_SECTION, PE_KEY};
 #[cfg(feature = "test-fixtures")]
 pub use elf::fixture as elf_fixture;
@@ -33,7 +36,7 @@ pub use verify::{
     load_embedded_root, load_trusted_root, load_trusted_root_offline, verdict_text, verify_digest,
     verify_digest_keeping_bundle, verify_file, Options, Report, Status, TrustRootSource,
 };
-pub use web_bundle::WebBundle;
+pub use web_bundle::{guess_release_bundle_url, WebBundle};
 pub use zone::{referrer_from_zone_identifier, MAX_ZONE_BYTES};
 
 /// The release version, from RELEASE_VERSION at build time (the crate version for a local build).

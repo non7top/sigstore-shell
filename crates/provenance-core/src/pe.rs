@@ -34,6 +34,11 @@ pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
     read_string(image, PE_KEY)
 }
 
+/// Reads the standard `ProductVersion` string that installer tooling fills in, with the same meaning of `Ok(None)`.
+pub fn read_product_version(image: &[u8]) -> Result<Option<String>, String> {
+    read_string(image, "ProductVersion")
+}
+
 /// Reads the optional `ProvenanceBundle` string, with the same meaning of `Ok(None)`.
 pub fn read_bundle_url(image: &[u8]) -> Result<Option<String>, String> {
     read_string(image, PE_BUNDLE_KEY)
