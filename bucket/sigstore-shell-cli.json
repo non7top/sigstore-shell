@@ -1,12 +1,12 @@
 {
-    "version": "0.2.0",
+    "version": "0.4.0",
     "description": "Shows where an exe came from, using its Sigstore attestation.",
     "homepage": "https://github.com/non7top/sigstore-shell",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/non7top/sigstore-shell/releases/download/v0.2.0/sigstore-shell-cli.exe",
-            "hash": "09d2e6e08c024c296fbc42b52c7d4a9610e650b5e7b297217e85f551007bf639"
+            "url": "https://github.com/non7top/sigstore-shell/releases/download/v0.4.0/sigstore-shell-cli.exe",
+            "hash": "c497567a6eaa9feabfa11dbb9638149abae99d09ef8347dc3ebcbd98eeb87737"
         }
     },
     "bin": "sigstore-shell-cli.exe",
