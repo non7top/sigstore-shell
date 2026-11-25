@@ -8,9 +8,11 @@ ENV CARGO_HOME=/cargo \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip nsis librsvg2-bin \
     && rm -rf /var/lib/apt/lists/* \
-    && update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix \
-    && rustup target add x86_64-pc-windows-gnu \
-    && rustup component add clippy rustfmt
+    && update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+
+# The toolchain version, target and components come from rust-toolchain.toml, as in CI.
+COPY rust-toolchain.toml /tmp/toolchain/
+RUN cd /tmp/toolchain && CARGO_HOME=/usr/local/cargo rustup toolchain install && rm -rf /tmp/toolchain
 
 # Mode 1777 so an arbitrary non-root uid:gid can write the named cache volumes.
 RUN mkdir -p /cargo /cargo-target /app && chmod 1777 /cargo /cargo-target /app

@@ -1,0 +1,31 @@
+name: Set up the build
+description: Installs the cross-compilation tools and the Rust toolchain pinned in rust-toolchain.toml, and restores the cargo cache.
+
+inputs:
+  cache-key:
+    description: Names the cache; jobs that build different profiles use different names.
+    required: true
+  save-cache:
+    description: Whether the job saves the cache at the end ('true' or 'false').
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # The posix thread model is what Rust's windows-gnu std expects.
+    - name: Install the cross-compilation tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 cmake nasm zip nsis librsvg2-bin
+        sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+
+    - name: Install the pinned Rust toolchain
+      shell: bash
+      run: rustup toolchain install
+
+    - name: Restore the cargo cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        shared-key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.save-cache }}

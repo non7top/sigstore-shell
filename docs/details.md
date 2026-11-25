@@ -6,6 +6,7 @@ Command line, Explorer extension, build, install and verification status. The ov
 
 ```sh
 make build                      # dist/sigstore-shell-cli (everything runs in containers)
+make dist                       # dist/: the DLL, the Windows CLI and the Linux CLI
 make lint test                  # clippy, rustfmt, unit tests
 
 sigstore-shell-cli verify app.exe                    # repo from the embedded claim (PE version string or ELF note)
@@ -71,6 +72,8 @@ make wine-ui      # also builds the page under a virtual display and presses Ver
 make wine-demo    # screenshots the tab (dist/tab.after.bmp) for crates/sigstore-shell-ext/tests/fixtures/demo-report.json, no network
 # the demo-report feature (test hook) lets SIGSTORE_SHELL_DEMO_REPORT=<report.json> show a fixed report in the tab without a lookup; releases never enable it.
 ```
+
+CI builds on the runner instead of in the container: `.github/actions/setup-build` installs the same cross-compilation packages and the toolchain pinned in `rust-toolchain.toml` (the Dockerfile reads the same file), then `make lint CARGO=cargo`, `make test CARGO=cargo` and `scripts/build-dist.sh` run as they do locally. `release.yml` still builds with the container. To run the workflow locally with `act`, use an image that ships `rustup` (the default `act` image does not, hosted runners do): `act push -W .github/workflows/build.yml -j check -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:rust-latest`. The cosign dry run in the `package` job needs GitHub's OIDC token and does not run under `act`.
 
 The DLL imports only Windows system DLLs (checked with `objdump -p`); it needs no Rust or MinGW runtime. TLS is rustls with the platform verifier, so certificates are checked against the Windows certificate store and no OpenSSL or bundled root list is involved. It is 64-bit only, so 32-bit programs that show Properties will not load it.
 
