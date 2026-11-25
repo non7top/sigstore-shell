@@ -1,7 +1,8 @@
-use crate::claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE};
+use crate::claim_format::{ELF_BUNDLE_NOTE_NAME, ELF_NOTE_NAME, ELF_NOTE_TYPE};
 
 const SHT_NOTE: u32 = 7;
 const MAX_CLAIM: usize = 256;
+const MAX_BUNDLE_URL: usize = 512;
 
 struct Reader<'a> {
     data: &'a [u8],
@@ -44,8 +45,8 @@ fn align4(n: u64) -> u64 {
     (n + 3) & !3
 }
 
-/// Finds the claim note in the SHT_NOTE sections. `None` if malformed or absent.
-fn find(image: &[u8]) -> Option<Option<String>> {
+/// Finds the note called `name` in the SHT_NOTE sections. `None` if malformed or absent.
+fn find(image: &[u8], name: &str, max: usize) -> Option<Option<String>> {
     let is64 = match *image.get(4)? {
         1 => false,
         2 => true,
@@ -80,14 +81,14 @@ fn find(image: &[u8]) -> Option<Option<String>> {
             (u64::from(r.u32(sh + 0x10)?), u64::from(r.u32(sh + 0x14)?))
         };
         let notes = r.bytes(off, size)?;
-        if let Some(claim) = scan_notes(notes, big) {
+        if let Some(claim) = scan_notes(notes, big, name, max) {
             return Some(Some(claim));
         }
     }
     Some(None)
 }
 
-fn scan_notes(notes: &[u8], big: bool) -> Option<String> {
+fn scan_notes(notes: &[u8], big: bool, wanted: &str, max: usize) -> Option<String> {
     let r = Reader { data: notes, big };
     let mut at = 0u64;
     while at + 12 <= notes.len() as u64 {
@@ -99,8 +100,8 @@ fn scan_notes(notes: &[u8], big: bool) -> Option<String> {
         let next = desc_at.checked_add(align4(descsz))?;
         let name = r.bytes(name_at, namesz)?;
         if kind == ELF_NOTE_TYPE
-            && name.strip_suffix(&[0]) == Some(ELF_NOTE_NAME.as_bytes())
-            && descsz <= MAX_CLAIM as u64
+            && name.strip_suffix(&[0]) == Some(wanted.as_bytes())
+            && descsz <= max as u64
         {
             let desc = r.bytes(desc_at, descsz)?;
             let value = std::str::from_utf8(desc).ok()?.trim_matches('\0').trim();
@@ -113,17 +114,33 @@ fn scan_notes(notes: &[u8], big: bool) -> Option<String> {
     None
 }
 
-/// Reads the provenance note. `Err` means the file is not a parseable ELF; a valid ELF without the note is `Ok(None)`.
-pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
+fn read_note(image: &[u8], name: &str, max: usize) -> Result<Option<String>, String> {
     if !image.starts_with(b"\x7fELF") {
         return Err("not an ELF file".into());
     }
-    find(image).ok_or_else(|| "malformed ELF file".into())
+    find(image, name, max).ok_or_else(|| "malformed ELF file".into())
+}
+
+/// Reads the provenance note. `Err` means the file is not a parseable ELF; a valid ELF without the note is `Ok(None)`.
+pub fn read_claim(image: &[u8]) -> Result<Option<String>, String> {
+    read_note(image, ELF_NOTE_NAME, MAX_CLAIM)
+}
+
+/// Reads the optional bundle link note, with the same meaning of `Ok(None)`.
+pub fn read_bundle_url(image: &[u8]) -> Result<Option<String>, String> {
+    read_note(image, ELF_BUNDLE_NOTE_NAME, MAX_BUNDLE_URL)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixture {
     use crate::claim_format::{ELF_NOTE_NAME, ELF_NOTE_TYPE};
+
+    pub fn elf_with_claim(claim: Option<&str>) -> Vec<u8> {
+        match claim {
+            Some(c) => elf_with_notes(&[(ELF_NOTE_NAME, c)]),
+            None => elf_with_notes(&[]),
+        }
+    }
 
     fn pad4(buf: &mut Vec<u8>) {
         while !buf.len().is_multiple_of(4) {
@@ -131,21 +148,17 @@ pub mod fixture {
         }
     }
 
-    /// A minimal little-endian ELF64 with one SHT_NOTE section; `claim` of `None` leaves the note out.
-    pub fn elf_with_claim(claim: Option<&str>) -> Vec<u8> {
+    /// A minimal little-endian ELF64 with one SHT_NOTE section holding the given (name, value) notes.
+    pub fn elf_with_notes(notes: &[(&str, &str)]) -> Vec<u8> {
         let mut note = Vec::new();
-        if let Some(c) = claim {
-            note.extend(
-                u32::try_from(ELF_NOTE_NAME.len() + 1)
-                    .unwrap()
-                    .to_le_bytes(),
-            );
-            note.extend(u32::try_from(c.len()).unwrap().to_le_bytes());
+        for (name, value) in notes {
+            note.extend(u32::try_from(name.len() + 1).unwrap().to_le_bytes());
+            note.extend(u32::try_from(value.len()).unwrap().to_le_bytes());
             note.extend(ELF_NOTE_TYPE.to_le_bytes());
-            note.extend(ELF_NOTE_NAME.as_bytes());
+            note.extend(name.as_bytes());
             note.push(0);
             pad4(&mut note);
-            note.extend(c.as_bytes());
+            note.extend(value.as_bytes());
             pad4(&mut note);
         }
         let mut img = vec![0u8; 64];
@@ -176,7 +189,7 @@ pub mod fixture {
 
 #[cfg(test)]
 mod tests {
-    use super::fixture::elf_with_claim;
+    use super::fixture::{elf_with_claim, elf_with_notes};
     use super::*;
 
     #[test]
@@ -235,6 +248,28 @@ mod tests {
         let desc = 64 + 12 + 16;
         elf[desc] = 0xff;
         assert_eq!(read_claim(&elf).unwrap(), None);
+    }
+
+    #[test]
+    fn the_claim_and_the_bundle_link_are_separate_notes_in_either_order() {
+        let url = "https://github.com/o/r/releases/download/v1/app.cosign.bundle";
+        for notes in [
+            [(ELF_NOTE_NAME, "o/r"), (ELF_BUNDLE_NOTE_NAME, url)],
+            [(ELF_BUNDLE_NOTE_NAME, url), (ELF_NOTE_NAME, "o/r")],
+        ] {
+            let elf = elf_with_notes(&notes);
+            assert_eq!(read_claim(&elf).unwrap().as_deref(), Some("o/r"));
+            assert_eq!(read_bundle_url(&elf).unwrap().as_deref(), Some(url));
+        }
+        let only_repo = elf_with_claim(Some("o/r"));
+        assert_eq!(read_bundle_url(&only_repo).unwrap(), None);
+    }
+
+    #[test]
+    fn a_bundle_link_over_the_limit_is_ignored() {
+        let long = format!("https://example.org/{}", "a".repeat(MAX_BUNDLE_URL));
+        let elf = elf_with_notes(&[(ELF_BUNDLE_NOTE_NAME, &long)]);
+        assert_eq!(read_bundle_url(&elf).unwrap(), None);
     }
 
     #[test]
