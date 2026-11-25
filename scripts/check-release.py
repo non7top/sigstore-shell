@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Checks that every built file carries the release version and the commit it was built from.
 
-usage: check-release.py <version> <commit> <dist-dir>
+usage: check-release.py <version> <commit> <dist-dir> [<owner/repo>]
+
+With a repo, each file must also embed the link to the cosign bundle of its own release asset.
 """
 import re
 import subprocess
@@ -21,6 +23,10 @@ def has_resource_string(data, key, value):
 
 def main():
     version, commit, dist = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+    repo = sys.argv[4] if len(sys.argv) > 4 else None
+
+    def bundle_url(asset):
+        return f"https://github.com/{repo}/releases/download/v{version}/{asset}.cosign.bundle"
     failures = []
 
     linux = dist / "sigstore-shell-cli"
@@ -29,6 +35,12 @@ def main():
     print(f"{linux.name}: {got}")
     if got != want:
         failures.append(f"{linux.name} printed {got!r}, expected {want!r}")
+    if repo:
+        url = bundle_url(linux.name)
+        ok = url.encode() in linux.read_bytes()
+        print(f"{linux.name}: ProvenanceBundle = {url}: {'ok' if ok else 'MISSING'}")
+        if not ok:
+            failures.append(f"{linux.name} does not embed {url}")
 
     windows = [dist / "sigstore-shell-cli.exe", dist / "sigstore_shell_ext.dll"]
     windows += sorted(dist.glob("sigstore-shell-Setup-*.exe"))
@@ -41,6 +53,12 @@ def main():
             print(f"{path.name}: {key} = {value}: {'ok' if ok else 'MISSING'}")
             if not ok:
                 failures.append(f"{path.name} has no {key} = {value} in its version resource")
+        if repo:
+            url = bundle_url(path.name)
+            ok = has_resource_string(data, "ProvenanceBundle", url)
+            print(f"{path.name}: ProvenanceBundle = {url}: {'ok' if ok else 'MISSING'}")
+            if not ok:
+                failures.append(f"{path.name} has no ProvenanceBundle = {url} in its version resource")
 
     for failure in failures:
         print(f"::error::{failure}")

@@ -95,6 +95,9 @@ fn main() {
     if let Ok(repo) = std::env::var("PROVENANCE_REPO") {
         res.set(claim_format::PE_KEY, &repo);
     }
+    if let Some(url) = build_id::bundle_url("sigstore_shell_ext.dll") {
+        res.set(claim_format::PE_BUNDLE_KEY, &url);
+    }
     // The crate version stays fixed: release-please cannot update Cargo.lock, and --locked builds need it to match.
     if let Some(version) = build_id::release_version() {
         res.set("FileVersion", &version);

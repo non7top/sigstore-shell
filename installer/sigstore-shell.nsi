@@ -35,6 +35,9 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Apache License 2.0"
 ; Absent on local builds, so they make no claim about where they came from.
 !ifdef PROVENANCE_REPO
   VIAddVersionKey /LANG=1033 "ProvenanceRepo" "${PROVENANCE_REPO}"
+  !ifdef BUNDLE_URL
+    VIAddVersionKey /LANG=1033 "ProvenanceBundle" "${BUNDLE_URL}"
+  !endif
 !endif
 
 !insertmacro MUI_PAGE_DIRECTORY
