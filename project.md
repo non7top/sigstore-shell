@@ -57,6 +57,7 @@ The claim says which repo the publisher says published the file. This section is
 - Tab label: "Provenance".
 - **Verification is an explicit button, not automatic.** Hashing a large exe, the network call and the signature check can take significant time, and the click is also the consent to send the file's hash to GitHub. Opening the tab never does any of that.
 - Before the button is pressed: the embedded repo, if any, labelled "claimed, not verified", or "no provenance information in this file".
+- Download hint: when the file has a `Zone.Identifier` stream, the details also show where the browser says it came from, labelled "Downloaded from (unverified)". It never changes the result or the lookup (issue #31, option 1).
 - After: verified (repo/owner/workflow/commit/date), no attestation found, mismatch with the embedded claim, or lookup failed (offline, rate-limited). Run it off the UI thread with a progress indicator and a cancel, and cache the result per file hash.
 - "No attestation" means none was found, not "unsafe". Most exes in the wild have none.
 

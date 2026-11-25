@@ -107,6 +107,8 @@ impl Mailbox {
 struct Ui {
     claim: Claim,
     rekor: bool,
+    /// From the file's Zone.Identifier stream; shown as unverified, used for nothing else.
+    downloaded_from: Option<String>,
     state: State,
     cancel: Arc<AtomicBool>,
     /// From the last fresh response in this tab only; nothing is stored.
@@ -119,6 +121,7 @@ impl Ui {
         let env = Env {
             rate: self.rate,
             tz: self.tz.clone(),
+            downloaded_from: self.downloaded_from.clone(),
         };
         view_in(&self.claim, &self.state, self.rekor, &env)
     }
@@ -156,6 +159,7 @@ pub fn create(path: PathBuf) -> Result<HPROPSHEETPAGE> {
         ui: RefCell::new(Ui {
             claim: Claim::Absent,
             rekor: false,
+            downloaded_from: None,
             state: State::Idle,
             cancel: Arc::new(AtomicBool::new(false)),
             rate: None,
@@ -848,6 +852,7 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
             .map(|d| Settings::load(&d))
             .unwrap_or_default()
             .rekor;
+        ui.downloaded_from = crate::job::download_hint(&data.path);
         ui.tz = jiff::tz::TimeZone::system();
     }
     create_fonts(hwnd, data);

@@ -14,6 +14,7 @@ mod provider;
 mod rekor;
 mod verify;
 mod web_bundle;
+mod zone;
 
 pub use bundle_file::BundleFile;
 pub use claim::{read_claim, read_claim_file, ClaimError};
@@ -33,6 +34,7 @@ pub use verify::{
     verify_digest_keeping_bundle, verify_file, Options, Report, Status, TrustRootSource,
 };
 pub use web_bundle::WebBundle;
+pub use zone::{referrer_from_zone_identifier, MAX_ZONE_BYTES};
 
 /// The release version, from RELEASE_VERSION at build time (the crate version for a local build).
 pub const VERSION: &str = env!("SIGSTORE_SHELL_VERSION");

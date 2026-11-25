@@ -23,6 +23,21 @@ pub struct JobInput<'a> {
     pub refresh: bool,
 }
 
+/// What the file's `Zone.Identifier` stream (written by browsers on NTFS) says about where it was
+/// downloaded from; `None` without the stream. Shown to the user as unverified, never used as evidence.
+pub fn download_hint(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    let mut text = String::new();
+    std::fs::File::open(stream)
+        .ok()?
+        .take(provenance_core::MAX_ZONE_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    provenance_core::referrer_from_zone_identifier(&text)
+}
+
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -735,6 +750,24 @@ mod tests {
         assert_eq!(r.status, Status::Verified);
         assert_eq!(r.provider.as_deref(), Some("bundle-file"));
         assert!(!entry_file(&dir.join("cache"), SHA).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_download_hint_reads_the_zone_stream_beside_the_file() {
+        let dir = tmp("zone");
+        let file = dir.join("app.exe");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(download_hint(&file), None);
+        // On NTFS this name is the alternate data stream; elsewhere it is an ordinary file.
+        std::fs::write(
+            dir.join("app.exe:Zone.Identifier"),
+            "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://github.com/o/r/releases/tag/v1\r\n",
+        )
+        .unwrap();
+        assert_eq!(download_hint(&file).as_deref(), Some("github.com/o/r"));
+        std::fs::write(dir.join("app.exe:Zone.Identifier"), vec![0xff; 100]).unwrap();
+        assert_eq!(download_hint(&file), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

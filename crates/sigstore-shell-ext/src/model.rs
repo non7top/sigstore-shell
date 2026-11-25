@@ -208,6 +208,8 @@ fn cached_line(report: &Report, tz: &jiff::tz::TimeZone) -> Option<String> {
 pub struct Env {
     pub rate: Option<Rate>,
     pub tz: jiff::tz::TimeZone,
+    /// Where the browser says the file was downloaded from (`Zone.Identifier`), shown as unverified.
+    pub downloaded_from: Option<String>,
 }
 
 impl Env {
@@ -215,6 +217,7 @@ impl Env {
         Self {
             rate,
             tz: jiff::tz::TimeZone::system(),
+            downloaded_from: None,
         }
     }
 }
@@ -224,6 +227,7 @@ impl Default for Env {
         Self {
             rate: None,
             tz: jiff::tz::TimeZone::UTC,
+            downloaded_from: None,
         }
     }
 }
@@ -478,6 +482,9 @@ fn done_view(report: &Report, claim: &Claim, env: &Env) -> Done {
     if let Some(p) = &report.provider {
         rows.push(("Answered by".into(), provider_label(p).into()));
     }
+    if let Some(from) = &env.downloaded_from {
+        rows.push(("Downloaded from (unverified)".into(), from.clone()));
+    }
     rows.push(("SHA-256".into(), report.file_sha256.clone()));
     rows.push((
         "Checked with".into(),
@@ -704,6 +711,25 @@ mod tests {
         let v = view(&Claim::Invalid("x".into()), &State::Idle, false);
         assert!(v.repo_note.contains("not a valid owner/repo"));
         assert!(!v.can_verify);
+    }
+
+    #[test]
+    fn the_download_hint_is_a_labelled_row_and_changes_nothing_else() {
+        let r = verified();
+        let plain = view(&Claim::Absent, &State::Done(Box::new(r.clone())), true);
+        let env = Env {
+            downloaded_from: Some("github.com/o/r".into()),
+            ..Env::default()
+        };
+        let hinted = view_in(&Claim::Absent, &State::Done(Box::new(r)), true, &env);
+        assert!(!plain.rows.iter().any(|(k, _)| k.starts_with("Downloaded")));
+        assert!(hinted.rows.contains(&(
+            "Downloaded from (unverified)".to_string(),
+            "github.com/o/r".to_string()
+        )));
+        assert_eq!(plain.headline, hinted.headline);
+        assert_eq!(plain.outcome, hinted.outcome);
+        assert_eq!(plain.links, hinted.links);
     }
 
     #[test]
@@ -1063,7 +1089,11 @@ mod tests {
             .push("Result cached from a check on 2026-10-08 04:24:11 UTC.".into());
         assert_eq!(rate_line(&r, &jiff::tz::TimeZone::UTC), None);
         let in_tz = |tz| {
-            let env = Env { rate: None, tz };
+            let env = Env {
+                rate: None,
+                tz,
+                downloaded_from: None,
+            };
             view_in(
                 &Claim::Absent,
                 &State::Done(Box::new(r.clone())),
@@ -1209,6 +1239,7 @@ mod tests {
                 remaining: 51,
             }),
             tz: jiff::tz::TimeZone::UTC,
+            downloaded_from: None,
         };
         let claim = Claim::Repo("cli/cli".into());
         assert_eq!(
