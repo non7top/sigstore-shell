@@ -4,12 +4,16 @@ export DOCKER_GID := $(shell id -g)
 CARGO := docker compose run --rm dev cargo
 WIN := x86_64-pc-windows-gnu
 
-.PHONY: build cli-win package installer dll fixture wine-smoke wine-ui wine-demo test lint fmt shell
+.PHONY: build dist cli-win package installer dll fixture wine-smoke wine-ui wine-demo test lint fmt shell
 
 build:
 	mkdir -p dist
 	$(CARGO) build --release --locked
 	docker compose run --rm dev cp /cargo-target/release/sigstore-shell-cli /app/dist/sigstore-shell-cli
+
+# The DLL, the Windows CLI and the Linux CLI in dist/; the first two share compiled dependencies.
+dist:
+	docker compose run --rm dev ./scripts/build-dist.sh
 
 cli-win:
 	mkdir -p dist
