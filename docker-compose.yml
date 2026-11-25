@@ -10,6 +10,7 @@ services:
       - GITHUB_TOKEN
       - PROVENANCE_REPO
       - RELEASE_VERSION
+      - RELEASE_COMMIT
     volumes:
       - .:/app
       - ${CARGO_CACHE:-cargo}:/cargo

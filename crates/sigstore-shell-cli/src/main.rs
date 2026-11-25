@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(
-    version,
+    version = provenance_core::VERSION_LONG,
     about = "Check where an exe came from, using its Sigstore attestation"
 )]
 enum Cli {
@@ -132,9 +132,15 @@ async fn run() -> Result<u8, String> {
     let (root, source) = load_trusted_root().await?;
     let report = verify_file(&file, &Options { repo }, &providers, &root, source).await?;
     if json {
+        let mut value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
+        value["built_by"] = serde_json::json!({
+            "name": "sigstore-shell-cli",
+            "version": provenance_core::VERSION,
+            "commit": provenance_core::COMMIT,
+        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+            serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
         );
     } else {
         print_text(&report);

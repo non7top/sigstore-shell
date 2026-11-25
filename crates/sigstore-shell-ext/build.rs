@@ -1,3 +1,5 @@
+#[path = "../provenance-core/build_id.rs"]
+mod build_id;
 #[path = "../provenance-core/src/claim_format.rs"]
 mod claim_format;
 
@@ -78,7 +80,6 @@ fn ico(svg: &Path) -> Vec<u8> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PROVENANCE_REPO");
-    println!("cargo:rerun-if-env-changed=RELEASE_VERSION");
     println!("cargo:rerun-if-changed=../../resources/icons");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -95,9 +96,12 @@ fn main() {
         res.set(claim_format::PE_KEY, &repo);
     }
     // The crate version stays fixed: release-please cannot update Cargo.lock, and --locked builds need it to match.
-    if let Ok(version) = std::env::var("RELEASE_VERSION") {
+    if let Some(version) = build_id::release_version() {
         res.set("FileVersion", &version);
         res.set("ProductVersion", &version);
+    }
+    if let Some(commit) = build_id::known_commit() {
+        res.set("BuildCommit", &commit);
     }
     res.compile().expect("compile version resource");
 }

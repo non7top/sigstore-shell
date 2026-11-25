@@ -13,6 +13,10 @@ else
 fi
 
 args=(-V2 "-DVERSION=$version" "-DVERSION_NUMERIC=$numeric" "-DOUTFILE=../dist/sigstore-shell-Setup-$version.exe")
+commit=${RELEASE_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}
+if [ -n "$commit" ]; then
+    args+=("-DCOMMIT=$commit")
+fi
 if [ -n "${PROVENANCE_REPO:-}" ]; then
     args+=("-DPROVENANCE_REPO=$PROVENANCE_REPO")
 fi
