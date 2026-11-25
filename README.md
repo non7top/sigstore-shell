@@ -73,4 +73,4 @@ Embed the claim and attest the files, as [non7top/promptloom](https://github.com
 
 ## License
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE). Copyright 2026 Vladimir Berezhnoy. Contributions are accepted under the same licence with a DCO sign-off, see [CONTRIBUTING.md](CONTRIBUTING.md).
