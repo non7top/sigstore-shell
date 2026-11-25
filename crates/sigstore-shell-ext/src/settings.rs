@@ -7,6 +7,8 @@ use std::path::Path;
 pub struct Settings {
     /// Also search the public Rekor v1 log by hash, which sends the hash to a second service.
     pub rekor: bool,
+    /// Also download the bundle that the file itself links to, which sends a request to that host.
+    pub web_bundle: bool,
 }
 
 impl Settings {
@@ -44,6 +46,14 @@ mod tests {
     #[test]
     fn rekor_opt_in_with_powershell_bom() {
         assert!(Settings::parse("\u{feff}{\"rekor\": true}").rekor);
+    }
+
+    #[test]
+    fn web_bundle_is_off_unless_opted_in() {
+        assert!(!Settings::parse("{}").web_bundle);
+        assert!(!Settings::parse(r#"{"web_bundle": "yes"}"#).web_bundle);
+        assert!(Settings::parse(r#"{"web_bundle": true}"#).web_bundle);
+        assert!(!Settings::parse(r#"{"web_bundle": true}"#).rekor);
     }
 
     #[test]
