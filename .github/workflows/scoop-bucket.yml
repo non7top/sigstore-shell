@@ -26,8 +26,10 @@ jobs:
   test:
     if: github.event_name != 'schedule'
     uses: ./.github/workflows/scoop.yml
+    # A called workflow's jobs, skipped ones included, may not ask for more than the caller job allows.
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     with:
       smoke-script: scripts/scoop-smoke.ps1
 
