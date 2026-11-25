@@ -94,6 +94,8 @@ fn main() {
     // Only release builds set this, so a local build does not claim to come from the repo's workflow.
     if let Ok(repo) = std::env::var("PROVENANCE_REPO") {
         res.set(claim_format::PE_KEY, &repo);
+        // A claim like ProvenanceRepo, never a verified publisher.
+        res.set("CompanyName", &repo);
     }
     if let Some(url) = build_id::bundle_url("sigstore_shell_ext.dll") {
         res.set(claim_format::PE_BUNDLE_KEY, &url);

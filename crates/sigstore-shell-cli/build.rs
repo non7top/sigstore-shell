@@ -58,6 +58,8 @@ fn main() {
     // Only release builds set this, so a local build does not claim to come from the repo's workflow.
     if let Some(repo) = &repo {
         res.set(claim_format::PE_KEY, repo);
+        // A claim like ProvenanceRepo, never a verified publisher.
+        res.set("CompanyName", repo);
     }
     if let Some(url) = build_id::bundle_url("sigstore-shell-cli.exe") {
         res.set(claim_format::PE_BUNDLE_KEY, &url);

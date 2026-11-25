@@ -3,7 +3,8 @@
 
 usage: check-release.py <version> <commit> <dist-dir> [<owner/repo>]
 
-With a repo, each file must also embed the link to the cosign bundle of its own release asset.
+With a repo, each file must also embed the link to the cosign bundle of its own release asset, and each
+Windows file must name the repo as its CompanyName.
 """
 import re
 import subprocess
@@ -54,6 +55,10 @@ def main():
             if not ok:
                 failures.append(f"{path.name} has no {key} = {value} in its version resource")
         if repo:
+            ok = has_resource_string(data, "CompanyName", repo)
+            print(f"{path.name}: CompanyName = {repo}: {'ok' if ok else 'MISSING'}")
+            if not ok:
+                failures.append(f"{path.name} has no CompanyName = {repo} in its version resource")
             url = bundle_url(path.name)
             ok = has_resource_string(data, "ProvenanceBundle", url)
             print(f"{path.name}: ProvenanceBundle = {url}: {'ok' if ok else 'MISSING'}")
