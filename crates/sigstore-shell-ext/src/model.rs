@@ -380,7 +380,7 @@ fn consent(rekor: bool, web_host: Option<&str>) -> String {
     }
     if let Some(host) = web_host {
         s.push_str(&format!(
-            " Web bundle is enabled in settings.json, so the bundle named in the file is also downloaded from {host}, which sees this request.",
+            " Web bundle is enabled in settings.json, so if those lookups do not verify the file, the bundle named in the file is downloaded from {host}, which sees that request.",
         ));
     }
     s

@@ -145,7 +145,10 @@ async fn run() -> Result<u8, String> {
         match read_bundle_url_file(&file) {
             Ok(Some(url)) => match WebBundle::new(&url) {
                 Ok(web) => {
-                    eprintln!("note: downloading the bundle from {}", web.host());
+                    eprintln!(
+                        "note: --web-bundle downloads a bundle from {} only if the lookups before it do not verify the file",
+                        web.host()
+                    );
                     providers.push(Box::new(web));
                 }
                 Err(e) => eprintln!("note: --web-bundle skipped, the file's link is unusable: {e}"),
