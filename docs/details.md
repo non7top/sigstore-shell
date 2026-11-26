@@ -34,6 +34,7 @@ Outcomes and exit codes:
 | lookup failed | 12 | Offline, rate-limited or an error; says nothing about whether an attestation exists |
 | verification failed | 13 | An attestation was returned but did not verify |
 | not checked | 14 | No repo to ask about and none of `--bundle`, `--bundle-url` and `--rekor` given |
+| verified, nothing expected | 15 | A bundle verifies, but the file has no embedded repo and `--repo` was not given, so the signer was compared with nothing. Pass `--repo owner/repo` to get 0 or 11 |
 
 Code lives in `crates/provenance-core` (PE and ELF claim reader, SHA-256, `Provider` trait with GitHub and Rekor v1 implementations, verification through [sigstore-verify](https://crates.io/crates/sigstore-verify)) and `crates/sigstore-shell-cli`.
 

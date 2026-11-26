@@ -61,7 +61,7 @@ gh attestation verify sigstore-shell-cli.exe --repo non7top/sigstore-shell
 
 Each release file also has a keyless cosign signature in a `.cosign.bundle` file next to it; the commands are in [Download and verify a release](docs/details.md#download-and-verify-a-release). `sigstore-shell-cli --version` prints the release version and the commit it was built from.
 
-Exit codes: 0 verified, 10 no attestation, 11 mismatch, 12 lookup failed, 13 verification failed, 14 not checked. What each means is in the [table in docs/details.md](docs/details.md#command-line). Without `GH_TOKEN` or `GITHUB_TOKEN` the GitHub API allows 60 requests per hour per IP address.
+Exit codes: 0 verified, 10 no attestation, 11 mismatch, 12 lookup failed, 13 verification failed, 14 not checked, 15 verified but no repo was expected. What each means is in the [table in docs/details.md](docs/details.md#command-line). Without `GH_TOKEN` or `GITHUB_TOKEN` the GitHub API allows 60 requests per hour per IP address.
 
 ## Status
 
