@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release-please:
-    uses: non7top/gh-workflows/.github/workflows/release-please.yml@main
+    uses: non7top/gh-workflows/.github/workflows/release-please.yml@f2bf00c2191b115f544a36daeaa730f9e7ba672b # main
     permissions:
       contents: write
       pull-requests: write

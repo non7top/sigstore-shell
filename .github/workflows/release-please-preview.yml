@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   preview:
-    uses: non7top/gh-workflows/.github/workflows/release-please-preview.yml@main
+    uses: non7top/gh-workflows/.github/workflows/release-please-preview.yml@f2bf00c2191b115f544a36daeaa730f9e7ba672b # main
     permissions:
       contents: read
       pull-requests: write

@@ -22,7 +22,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/setup-build
         with:
@@ -44,7 +44,7 @@ jobs:
       # The cosign dry run below mints a Fulcio cert through OIDC.
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -55,7 +55,7 @@ jobs:
       - name: Predict next version
         id: predict
         if: github.event_name == 'pull_request'
-        uses: non7top/release-please-forecast@v1
+        uses: non7top/release-please-forecast@44fd4e55179855b4182292cf96fe7c6ce5bfe227 # v1.7.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           post-comment: 'false'
@@ -94,7 +94,7 @@ jobs:
       - name: Package
         run: ./scripts/package.sh ${{ steps.vars.outputs.version }}
 
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       # Proves the keyless sign/verify invocation in release.yml works before a real release runs it.
       # Dependabot runs get no OIDC token.
@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload the extension package
         id: upload
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: dist/sigstore-shell-ext-${{ steps.vars.outputs.version }}-windows-x64.zip
           retention-days: 14
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload the installer
         id: upload-installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: dist/sigstore-shell-Setup-${{ steps.vars.outputs.version }}.exe
           retention-days: 14
@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload the Windows CLI
         id: upload-cli
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: dist/sigstore-shell-cli.exe
           retention-days: 14
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload the Linux CLI
         id: upload-cli-linux
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: dist/sigstore-shell-cli
           retention-days: 14
