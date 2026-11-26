@@ -15,8 +15,7 @@ if ($line -match '^sigstore-shell-cli (\S+) \(commit ([0-9a-f]{40})\)$') {
         throw "--version says $version, the manifest says $($manifest.version)"
     }
 } else {
-    # Releases before the one that added the commit report the crate version, which is stale.
-    Write-Host "::warning::--version has no commit, so the manifest version $($manifest.version) cannot be compared with it"
+    throw "--version has no commit, so the manifest version $($manifest.version) cannot be compared with it: $line"
 }
 
 # The exe checks itself: it carries its repo in the version resource and the release attests it.

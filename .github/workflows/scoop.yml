@@ -48,6 +48,9 @@ on:
       branch:
         description: Branch that holds the update
         value: ${{ jobs.autoupdate.outputs.branch }}
+      sha:
+        description: Commit that was pushed to that branch, which is the one to test and to merge
+        value: ${{ jobs.autoupdate.outputs.sha }}
 
 permissions:
   contents: read
@@ -157,6 +160,7 @@ jobs:
     outputs:
       updated: ${{ steps.pr.outputs.updated }}
       branch: scoop-autoupdate
+      sha: ${{ steps.pr.outputs.sha }}
     env:
       BUCKET_DIR: ${{ inputs.bucket-dir }}
       APP: ${{ inputs.app }}
@@ -191,6 +195,7 @@ jobs:
           git switch -c scoop-autoupdate
           git add -- $changed
           git commit -m $title
+          $sha = git rev-parse HEAD
           git push origin HEAD:refs/heads/scoop-autoupdate --force
           $open = gh pr list --head scoop-autoupdate --state open --json number --jq '.[0].number'
           if ($open) {
@@ -198,4 +203,4 @@ jobs:
           } else {
               gh pr create --head scoop-autoupdate --title $title --body 'Opened by the autoupdate job in the reusable Scoop workflow: checkver -Update rewrote the manifests listed in the title.'
           }
-          'updated=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          @('updated=true', "sha=$sha") | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

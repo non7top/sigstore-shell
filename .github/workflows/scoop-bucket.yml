@@ -74,7 +74,8 @@ jobs:
       test: false
       autoupdate: true
 
-  # The update PR is opened with GITHUB_TOKEN, which starts no checks of its own, so test its branch here.
+  # The update PR is opened with GITHUB_TOKEN, which starts no checks of its own, so test its commit here.
+  # Testing and merging go by that commit, so a branch another run pushed in between is not merged untested.
   verify-update:
     needs: autoupdate
     if: needs.autoupdate.outputs.updated == 'true'
@@ -83,7 +84,7 @@ jobs:
       contents: write
       pull-requests: write
     with:
-      ref: ${{ needs.autoupdate.outputs.branch }}
+      ref: ${{ needs.autoupdate.outputs.sha }}
       smoke-script: scripts/scoop-smoke.ps1
 
   merge-update:
@@ -98,4 +99,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ needs.autoupdate.outputs.branch }}
-        run: gh pr merge "$BRANCH" --merge --delete-branch
+          SHA: ${{ needs.autoupdate.outputs.sha }}
+        run: gh pr merge "$BRANCH" --merge --delete-branch --match-head-commit "$SHA"
