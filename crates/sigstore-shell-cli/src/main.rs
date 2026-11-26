@@ -159,7 +159,7 @@ async fn run() -> Result<u8, String> {
     }
     if web_bundle {
         match bundle_link_file(&file) {
-            Some(url) => match WebBundle::new(&url) {
+            Some(url) => match WebBundle::from_file_link(&url) {
                 Ok(web) => {
                     eprintln!(
                         "note: --web-bundle downloads a bundle from {} only if the lookups before it do not verify the file",

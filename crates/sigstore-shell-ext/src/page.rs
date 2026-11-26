@@ -859,7 +859,7 @@ unsafe fn on_init(hwnd: HWND, psp: *const PROPSHEETPAGEW) {
             .then(|| bundle_link_file(&data.path))
             .flatten()
             .and_then(|url| {
-                let host = WebBundle::new(&url).ok()?.host().to_string();
+                let host = WebBundle::from_file_link(&url).ok()?.host().to_string();
                 Some((url, host))
             });
         ui.downloaded_from = crate::job::download_hint(&data.path);
