@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.1](https://github.com/non7top/sigstore-shell/compare/v0.4.0...v0.4.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **build:** show the release version as File version in Explorer ([4df747d](https://github.com/non7top/sigstore-shell/commit/4df747dc750579d26cc376aaa0648aa68c9f5d2e))
+* **cli:** exit 15 when a bundle verifies but no repo was expected ([d62cf34](https://github.com/non7top/sigstore-shell/commit/d62cf3482f4e6ca3b44e0cb8d632431583256b5c))
+* **rekor:** read at most 25 entries and report one that fails instead of aborting the search ([c4c4143](https://github.com/non7top/sigstore-shell/commit/c4c41437e86426f5a28c42da5e7c49cd76e51fee))
+* **verify:** close the gaps found in the app-code audit ([fbc4b3b](https://github.com/non7top/sigstore-shell/commit/fbc4b3bee3e1c5f8c3a318b2cb24567d2f7d9d84))
+* **verify:** count a DSSE attestation as provenance only when its statement is SLSA build provenance ([522909d](https://github.com/non7top/sigstore-shell/commit/522909d2ee58f7ce2c3ffafcd78914056ad079ef))
+* **verify:** say in the result when the built-in trust root was used instead of the TUF one ([b621766](https://github.com/non7top/sigstore-shell/commit/b6217666b2f782bbc919856d49f24b74e9b7c6e0))
+* **web-bundle:** never connect to loopback, private or link-local addresses for a link read from a file ([25e3fce](https://github.com/non7top/sigstore-shell/commit/25e3fce8c5bddb9ae81785612ef51d8626de1643))
+
+
+### Dependencies
+
+* bump the cargo group with 2 updates ([9a07012](https://github.com/non7top/sigstore-shell/commit/9a07012cd1833511a4e427cd8c35adff269f7a45))
+
 ## [0.4.0](https://github.com/non7top/sigstore-shell/compare/v0.3.0...v0.4.0) (2026-11-25)
 
 
