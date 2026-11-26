@@ -61,6 +61,9 @@ pub struct Report {
     pub searched: Vec<String>,
 }
 
+/// Shown with every result checked against the root compiled into this build.
+pub const EMBEDDED_ROOT_NOTE: &str = "Checked against the Sigstore trust root built into this program, not one fetched from Sigstore's TUF repository; it may be out of date.";
+
 pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     match TrustedRoot::production().await {
         Ok(root) => Ok((root, TrustRootSource::Tuf)),
@@ -206,6 +209,9 @@ pub async fn verify_digest_keeping_bundle(
         notes,
         searched: Vec::new(),
     };
+    if root_source == TrustRootSource::Embedded {
+        report.notes.push(EMBEDDED_ROOT_NOTE.into());
+    }
     let verifier = Verifier::new(root).map_err(|e| format!("trust root unusable: {e}"))?;
 
     let mut answered_empty = false;
@@ -476,6 +482,27 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_result_checked_against_the_built_in_root_says_so() {
+        let embedded = run(Mock::Empty, DIGEST, Some("cli/cli")).await;
+        assert!(embedded.notes.iter().any(|n| n == EMBEDDED_ROOT_NOTE));
+
+        let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(Mock::Empty)];
+        let fetched = verify_digest(
+            DIGEST,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            TrustRootSource::Tuf,
+        )
+        .await
+        .unwrap();
+        assert!(!fetched.notes.iter().any(|n| n == EMBEDDED_ROOT_NOTE));
     }
 
     #[tokio::test]
