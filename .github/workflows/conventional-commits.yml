@@ -18,6 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run conventional commits check
-        uses: webiny/action-conventional-commits@v1.4.2
+        uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
         with:
           allowed-commit-types: feat,fix,docs,style,refactor,test,build,perf,ci,chore,revert,merge,wip,deps
