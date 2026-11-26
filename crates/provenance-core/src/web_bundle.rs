@@ -1,6 +1,8 @@
 use crate::provider::{Fetched, Provider, ProviderError};
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::Url;
 use sigstore_verify::types::Bundle;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 const MAX_BUNDLE_BYTES: usize = 4 << 20;
@@ -15,12 +17,18 @@ pub struct WebBundle {
 }
 
 impl WebBundle {
-    /// Only https URLs without a user name or password are accepted.
+    /// A URL the user typed: only https, no user name or password.
     pub fn new(url: &str) -> Result<Self, String> {
-        Self::build(url, true)
+        Self::build(url, true, false)
     }
 
-    fn build(url: &str, https_only: bool) -> Result<Self, String> {
+    /// A link read from the file being checked, which the file's author controls: like [`Self::new`], and
+    /// it never connects to a loopback, private or link-local address, also not through DNS or a redirect.
+    pub fn from_file_link(url: &str) -> Result<Self, String> {
+        Self::build(url, true, true)
+    }
+
+    fn build(url: &str, https_only: bool, public_only: bool) -> Result<Self, String> {
         let parsed = Url::parse(url).map_err(|e| format!("'{url}' is not a URL: {e}"))?;
         if !scheme_allowed(&parsed, https_only) {
             return Err(format!("'{url}' is not an https URL"));
@@ -31,7 +39,14 @@ impl WebBundle {
         if parsed.host_str().is_none() {
             return Err(format!("'{url}' has no host"));
         }
-        let client = reqwest::Client::builder()
+        if public_only {
+            redirect_target_allowed(&parsed, true)?;
+        }
+        let mut builder = reqwest::Client::builder();
+        if public_only {
+            builder = builder.dns_resolver(PublicOnly);
+        }
+        let client = builder
             .user_agent(concat!(
                 "sigstore-shell/",
                 env!("SIGSTORE_SHELL_VERSION"),
@@ -45,6 +60,8 @@ impl WebBundle {
                     attempt.error("too many redirects")
                 } else if !scheme_allowed(attempt.url(), https_only) {
                     attempt.error("redirected to a URL that is not https")
+                } else if let Err(why) = redirect_target_allowed(attempt.url(), public_only) {
+                    attempt.error(why)
                 } else {
                     attempt.follow()
                 }
@@ -69,7 +86,7 @@ impl WebBundle {
             .get(self.url.clone())
             .send()
             .await
-            .map_err(|e| format!("request to {host} failed: {e}"))?;
+            .map_err(|e| format!("request to {host} failed: {}", error_chain(&e)))?;
         if !resp.status().is_success() {
             return Err(format!("{host} returned HTTP {}", resp.status()));
         }
@@ -121,6 +138,90 @@ pub fn guess_release_bundle_url(
         .pop_if_empty()
         .push(&format!("{file_name}.cosign.bundle"));
     Some(url.to_string())
+}
+
+/// reqwest's own text stops at "error sending request"; the cause is in the sources.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(s) = source {
+        text.push_str(": ");
+        text.push_str(&s.to_string());
+        source = s.source();
+    }
+    text
+}
+
+/// An address literal in the URL never goes through DNS, so the resolver cannot see it.
+fn redirect_target_allowed(url: &Url, public_only: bool) -> Result<(), String> {
+    if !public_only {
+        return Ok(());
+    }
+    let host = url.host_str().unwrap_or_default();
+    match host.trim_matches(['[', ']']).parse::<IpAddr>() {
+        Ok(ip) if !public_ip(ip) => Err(format!(
+            "{host} is a loopback, private or link-local address"
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(a) => public_v4(a),
+        IpAddr::V6(a) => public_v6(a),
+    }
+}
+
+fn public_v4(a: Ipv4Addr) -> bool {
+    let o = a.octets();
+    let shared = o[0] == 100 && o[1] & 0xc0 == 64;
+    !(a.is_unspecified()
+        || a.is_loopback()
+        || a.is_private()
+        || a.is_link_local()
+        || a.is_broadcast()
+        || a.is_multicast()
+        || shared
+        || o[0] == 0
+        || o[0] >= 240)
+}
+
+fn public_v6(a: Ipv6Addr) -> bool {
+    if let Some(v4) = a.to_ipv4_mapped() {
+        return public_v4(v4);
+    }
+    let s = a.segments();
+    // 64:ff9b::/96 carries an IPv4 address in its last 32 bits.
+    if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        let [hi, lo] = [s[6].to_be_bytes(), s[7].to_be_bytes()];
+        return public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
+    }
+    !(a.is_unspecified()
+        || a.is_loopback()
+        || a.is_multicast()
+        || s[0] & 0xfe00 == 0xfc00
+        || s[0] & 0xffc0 == 0xfe80)
+}
+
+/// Resolves a host name and keeps only its public addresses, so a name that points inside the network
+/// (or is rebound there) cannot be reached.
+struct PublicOnly;
+
+impl Resolve for PublicOnly {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let public: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|a| public_ip(a.ip()))
+                .collect();
+            if public.is_empty() {
+                return Err(format!("{host} has no public address").into());
+            }
+            Ok(Box::new(public.into_iter()) as Addrs)
+        })
+    }
 }
 
 fn scheme_allowed(url: &Url, https_only: bool) -> bool {
@@ -191,7 +292,7 @@ mod tests {
     }
 
     async fn fetch(base: &str, path: &str) -> Result<Fetched, ProviderError> {
-        WebBundle::build(&format!("{base}{path}"), false)
+        WebBundle::build(&format!("{base}{path}"), false, false)
             .unwrap()
             .fetch("", None)
             .await
@@ -268,10 +369,69 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_file_link_to_an_address_inside_the_network_is_refused() {
+        for url in [
+            "https://127.0.0.1/a",
+            "https://127.1/a",
+            "https://2130706433/a",
+            "https://0.0.0.0/a",
+            "https://10.1.2.3/a",
+            "https://172.16.0.1/a",
+            "https://192.168.1.1/a",
+            "https://169.254.169.254/latest/meta-data",
+            "https://100.64.0.1/a",
+            "https://[::1]/a",
+            "https://[::]/a",
+            "https://[fd00::1]/a",
+            "https://[fe80::1]/a",
+            "https://[::ffff:127.0.0.1]/a",
+            "https://[::ffff:10.0.0.1]/a",
+            "https://[64:ff9b::7f00:1]/a",
+        ] {
+            assert!(WebBundle::from_file_link(url).is_err(), "{url}");
+        }
+        for url in [
+            "https://example.org/a",
+            "https://8.8.8.8/a",
+            "https://[2606:4700::1111]/a",
+            "https://github.com/o/r/releases/download/v1/a.cosign.bundle",
+        ] {
+            assert!(WebBundle::from_file_link(url).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_link_the_user_typed_may_point_inside_the_network() {
+        assert!(WebBundle::new("https://127.0.0.1/a").is_ok());
+        assert!(WebBundle::new("https://intranet.example/a").is_ok());
+    }
+
+    #[test]
+    fn a_redirect_to_an_address_inside_the_network_is_refused_for_a_file_link() {
+        let inside = Url::parse("https://169.254.169.254/x").unwrap();
+        assert!(redirect_target_allowed(&inside, true).is_err());
+        assert!(redirect_target_allowed(&inside, false).is_ok());
+        let outside = Url::parse("https://example.org/x").unwrap();
+        assert!(redirect_target_allowed(&outside, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_name_that_resolves_inside_the_network_is_not_connected_to() {
+        let e = WebBundle::from_file_link("https://localhost:9/a")
+            .unwrap()
+            .fetch("", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no public address"), "{e}");
+    }
+
     #[tokio::test]
     async fn a_downloaded_bundle_verifies_the_file_it_was_made_for() {
         let base = serve(vec![ok(&sums_bundle())]).await;
-        let web = WebBundle::build(&format!("{base}/SHA256SUMS.cosign.bundle"), false).unwrap();
+        let web =
+            WebBundle::build(&format!("{base}/SHA256SUMS.cosign.bundle"), false, false).unwrap();
         let (root, source) = load_embedded_root().unwrap();
         let providers: Vec<Box<dyn Provider>> = vec![Box::new(web)];
         let r = verify_file(
@@ -290,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn a_bundle_for_other_bytes_is_not_verified() {
         let base = serve(vec![ok(&sums_bundle())]).await;
-        let web = WebBundle::build(&format!("{base}/b"), false).unwrap();
+        let web = WebBundle::build(&format!("{base}/b"), false, false).unwrap();
         let (root, source) = load_embedded_root().unwrap();
         let providers: Vec<Box<dyn Provider>> = vec![Box::new(web)];
         let r = verify_file(

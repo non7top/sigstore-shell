@@ -61,7 +61,7 @@ pub fn providers_for(
     if let Some(sidecar) = BundleFile::beside(path) {
         providers.push(Box::new(sidecar));
     }
-    if let Some(web) = web_url.and_then(|u| WebBundle::new(u).ok()) {
+    if let Some(web) = web_url.and_then(|u| WebBundle::from_file_link(u).ok()) {
         providers.push(Box::new(web));
     }
     if rekor {

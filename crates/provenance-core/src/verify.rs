@@ -4,7 +4,7 @@ use crate::identity::Identity;
 use crate::provider::{Provider, ProviderError, RateLimit};
 use serde::{Deserialize, Serialize};
 use sigstore_verify::trust_root::{TrustedRoot, TufConfig, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
-use sigstore_verify::types::{Bundle, Sha256Hash};
+use sigstore_verify::types::{Bundle, Sha256Hash, SignatureContent};
 use sigstore_verify::{VerificationPolicy, Verifier};
 use std::path::Path;
 
@@ -61,6 +61,9 @@ pub struct Report {
     pub searched: Vec<String>,
 }
 
+/// Shown with every result checked against the root compiled into this build.
+pub const EMBEDDED_ROOT_NOTE: &str = "Checked against the Sigstore trust root built into this program, not one fetched from Sigstore's TUF repository; it may be out of date.";
+
 pub async fn load_trusted_root() -> Result<(TrustedRoot, TrustRootSource), String> {
     match TrustedRoot::production().await {
         Ok(root) => Ok((root, TrustRootSource::Tuf)),
@@ -97,18 +100,47 @@ fn same_repo(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// The statement types that say how a file was built. Another type signed for the same bytes, such as an
+/// SBOM or a scan result, verifies like any attestation but does not say who built the file.
+const BUILD_PROVENANCE_TYPES: [&str; 3] = [
+    "https://slsa.dev/provenance/v1",
+    "https://slsa.dev/provenance/v0.2",
+    "https://slsa.dev/provenance/v0.1",
+];
+
+enum BundleProblem {
+    Invalid(String),
+    NotProvenance(String),
+}
+
+fn check_predicate_type(bundle: &Bundle) -> Result<(), String> {
+    let SignatureContent::DsseEnvelope(envelope) = &bundle.content else {
+        return Ok(());
+    };
+    let statement: serde_json::Value = serde_json::from_slice(envelope.payload.as_bytes())
+        .map_err(|e| format!("the attested statement is not JSON: {e}"))?;
+    match statement.get("predicateType").and_then(|t| t.as_str()) {
+        Some(t) if BUILD_PROVENANCE_TYPES.contains(&t) => Ok(()),
+        Some(t) => Err(format!("it attests {t}, not build provenance")),
+        None => Err("it names no predicate type, so it is not build provenance".into()),
+    }
+}
+
 fn verify_bundle(
     verifier: &Verifier,
     digest: Sha256Hash,
     bundle: &Bundle,
-) -> Result<Identity, String> {
+) -> Result<Identity, BundleProblem> {
     let result = verifier
         .verify(digest, bundle, &VerificationPolicy::any_identity())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| BundleProblem::Invalid(e.to_string()))?;
     let cert = result
         .certificate()
         .filter(|_| result.certificate_verified())
-        .ok_or("bundle carries no verified signing certificate")?;
+        .ok_or_else(|| {
+            BundleProblem::Invalid("bundle carries no verified signing certificate".into())
+        })?;
+    check_predicate_type(bundle).map_err(BundleProblem::NotProvenance)?;
     let signed_at = result
         .verified_timestamps()
         .iter()
@@ -206,6 +238,9 @@ pub async fn verify_digest_keeping_bundle(
         notes,
         searched: Vec::new(),
     };
+    if root_source == TrustRootSource::Embedded {
+        report.notes.push(EMBEDDED_ROOT_NOTE.into());
+    }
     let verifier = Verifier::new(root).map_err(|e| format!("trust root unusable: {e}"))?;
 
     let mut answered_empty = false;
@@ -256,11 +291,13 @@ pub async fn verify_digest_keeping_bundle(
                 // the same bytes must not hide one that names the expected repo.
                 let expected = options.repo.as_deref().or(claimed_repo.as_deref());
                 let mut rejected = Vec::new();
+                let mut not_provenance = Vec::new();
                 let mut verified = Vec::new();
                 for (i, bundle) in fetched.bundles.iter().enumerate() {
                     match verify_bundle(&verifier, digest, bundle) {
                         Ok(identity) => verified.push((i, identity)),
-                        Err(e) => {
+                        Err(BundleProblem::NotProvenance(e)) => not_provenance.push(e),
+                        Err(BundleProblem::Invalid(e)) => {
                             // A bundle nobody asked for (found beside the file) that is not for these
                             // bytes is noted below, not reported as a failed attestation.
                             if !provider.lenient() {
@@ -269,6 +306,12 @@ pub async fn verify_digest_keeping_bundle(
                             rejected.push(e);
                         }
                     }
+                }
+                for e in &not_provenance {
+                    report.notes.push(format!(
+                        "{}: ignored a signed attestation of this file: {e}",
+                        provider.name()
+                    ));
                 }
                 let chosen = {
                     let repos: Vec<Option<&str>> =
@@ -306,7 +349,7 @@ pub async fn verify_digest_keeping_bundle(
                         format!("{}: attestation did not verify: {e}", provider.name())
                     });
                 }
-                if provider.lenient() {
+                if provider.lenient() || !not_provenance.is_empty() {
                     answered_empty = true;
                     report.searched.push(provider.name().to_string());
                 }
@@ -476,6 +519,58 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    fn with_payload(bundle: &Bundle, payload: &[u8]) -> Bundle {
+        use sigstore_verify::types::PayloadBytes;
+        let mut bundle = bundle.clone();
+        let SignatureContent::DsseEnvelope(envelope) = &mut bundle.content else {
+            panic!("the fixture is a DSSE bundle");
+        };
+        envelope.payload = PayloadBytes::from_bytes(payload);
+        bundle
+    }
+
+    #[test]
+    fn only_a_build_provenance_statement_counts_as_provenance() {
+        let real = Bundle::from_json(BUNDLE).unwrap();
+        assert!(check_predicate_type(&real).is_ok());
+        for (predicate, ok) in [
+            ("https://slsa.dev/provenance/v1", true),
+            ("https://slsa.dev/provenance/v0.2", true),
+            ("https://spdx.dev/Document", false),
+            ("https://slsa.dev/provenance/v1/extra", false),
+            ("", false),
+        ] {
+            let statement = format!(
+                r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"{predicate}","predicate":{{}}}}"#
+            );
+            let bundle = with_payload(&real, statement.as_bytes());
+            assert_eq!(check_predicate_type(&bundle).is_ok(), ok, "{predicate}");
+        }
+        assert!(check_predicate_type(&with_payload(&real, br#"{"subject":[]}"#)).is_err());
+        assert!(check_predicate_type(&with_payload(&real, b"not json")).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_result_checked_against_the_built_in_root_says_so() {
+        let embedded = run(Mock::Empty, DIGEST, Some("cli/cli")).await;
+        assert!(embedded.notes.iter().any(|n| n == EMBEDDED_ROOT_NOTE));
+
+        let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        let providers: Vec<Box<dyn Provider>> = vec![Box::new(Mock::Empty)];
+        let fetched = verify_digest(
+            DIGEST,
+            Some("cli/cli".into()),
+            vec![],
+            &Options::default(),
+            &providers,
+            &root,
+            TrustRootSource::Tuf,
+        )
+        .await
+        .unwrap();
+        assert!(!fetched.notes.iter().any(|n| n == EMBEDDED_ROOT_NOTE));
     }
 
     #[tokio::test]

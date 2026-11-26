@@ -37,8 +37,19 @@ enum Cli {
     },
 }
 
-fn exit_code(status: Status) -> u8 {
-    match status {
+/// Exit code for "verified, but no repo was expected": the signature is valid, yet nothing was
+/// compared with it, so a script that tests for 0 must not read it as a provenance check.
+const EXIT_UNCONSTRAINED: u8 = 15;
+
+fn unconstrained(report: &Report) -> bool {
+    report.status == Status::Verified && report.queried_repo.is_none()
+}
+
+fn exit_code(report: &Report) -> u8 {
+    if unconstrained(report) {
+        return EXIT_UNCONSTRAINED;
+    }
+    match report.status {
         Status::Verified => 0,
         Status::NoAttestation => 10,
         Status::Mismatch => 11,
@@ -64,6 +75,11 @@ fn print_text(report: &Report) {
         }
     };
     println!("{headline}");
+    if unconstrained(report) {
+        println!(
+            "NOT CONSTRAINED: no repo was expected, so the signer was compared with nothing (exit {EXIT_UNCONSTRAINED}); pass --repo owner/repo to check it"
+        );
+    }
     println!("sha256:  {}", report.file_sha256);
     match &report.claimed_repo {
         Some(c) => println!("claimed: {c} (embedded in the file, not verified)"),
@@ -143,7 +159,7 @@ async fn run() -> Result<u8, String> {
     }
     if web_bundle {
         match bundle_link_file(&file) {
-            Some(url) => match WebBundle::new(&url) {
+            Some(url) => match WebBundle::from_file_link(&url) {
                 Ok(web) => {
                     eprintln!(
                         "note: --web-bundle downloads a bundle from {} only if the lookups before it do not verify the file",
@@ -175,7 +191,7 @@ async fn run() -> Result<u8, String> {
     } else {
         print_text(&report);
     }
-    Ok(exit_code(report.status))
+    Ok(exit_code(&report))
 }
 
 #[tokio::main]
@@ -185,6 +201,56 @@ async fn main() -> ExitCode {
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use provenance_core::TrustRootSource;
+
+    fn report(status: Status, queried_repo: Option<&str>) -> Report {
+        Report {
+            status,
+            file_sha256: String::new(),
+            claimed_repo: None,
+            queried_repo: queried_repo.map(str::to_string),
+            provider: None,
+            identity: None,
+            attestation_id: None,
+            log_index: None,
+            rate_limit: None,
+            trust_root: TrustRootSource::Tuf,
+            notes: Vec::new(),
+            searched: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn verified_with_an_expected_repo_exits_0() {
+        assert_eq!(exit_code(&report(Status::Verified, Some("o/r"))), 0);
+    }
+
+    #[test]
+    fn verified_with_nothing_expected_does_not_exit_0() {
+        assert_eq!(
+            exit_code(&report(Status::Verified, None)),
+            EXIT_UNCONSTRAINED
+        );
+    }
+
+    #[test]
+    fn other_outcomes_keep_their_codes() {
+        for (status, code) in [
+            (Status::NoAttestation, 10),
+            (Status::Mismatch, 11),
+            (Status::LookupFailed, 12),
+            (Status::VerificationFailed, 13),
+            (Status::NotChecked, 14),
+        ] {
+            assert_eq!(exit_code(&report(status, None)), code);
+            assert_eq!(exit_code(&report(status, Some("o/r"))), code);
         }
     }
 }
