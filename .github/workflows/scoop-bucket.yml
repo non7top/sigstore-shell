@@ -1,6 +1,7 @@
 name: scoop-bucket
 
 # Calls the reusable scoop.yml in this repo for the manifest in bucket/.
+# After a release it opens the version bump, tests that branch and merges the PR when the tests pass.
 on:
   push:
     branches: [master]
@@ -14,8 +15,12 @@ on:
       - 'bucket/**'
       - '.github/workflows/scoop*.yml'
       - 'scripts/scoop-smoke.ps1'
+  # The Release workflow uploads the assets before it ends, so the hashes exist by then.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   schedule:
-    # Every 4 hours, as in ScoopInstaller/BucketTemplate; release assets appear after the release is created.
+    # Fallback if the run after a release failed or was missed.
     - cron: '20 */4 * * *'
   workflow_dispatch:
 
@@ -24,7 +29,7 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_run'
     uses: ./.github/workflows/scoop.yml
     # A called workflow's jobs, skipped ones included, may not ask for more than the caller job allows.
     permissions:
@@ -33,8 +38,34 @@ jobs:
     with:
       smoke-script: scripts/scoop-smoke.ps1
 
+  # Every Release run ends here, also the ones that released nothing, so compare before starting Windows runners.
+  stale:
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      stale: ${{ steps.compare.outputs.stale }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          current=$(jq -r .version bucket/sigstore-shell-cli.json)
+          echo "latest release $latest, manifest $current"
+          if [ "v$current" = "$latest" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
   autoupdate:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: stale
+    if: needs.stale.outputs.stale == 'true'
     uses: ./.github/workflows/scoop.yml
     permissions:
       contents: write
@@ -42,3 +73,29 @@ jobs:
     with:
       test: false
       autoupdate: true
+
+  # The update PR is opened with GITHUB_TOKEN, which starts no checks of its own, so test its branch here.
+  verify-update:
+    needs: autoupdate
+    if: needs.autoupdate.outputs.updated == 'true'
+    uses: ./.github/workflows/scoop.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      ref: ${{ needs.autoupdate.outputs.branch }}
+      smoke-script: scripts/scoop-smoke.ps1
+
+  merge-update:
+    needs: [autoupdate, verify-update]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge the update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.autoupdate.outputs.branch }}
+        run: gh pr merge "$BRANCH" --merge --delete-branch
